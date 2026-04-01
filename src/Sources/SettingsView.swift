@@ -1,0 +1,910 @@
+import SwiftUI
+import ServiceManagement
+
+/// A single account row with disable toggle and remove button
+struct AccountRowView: View {
+    let account: AuthAccount
+    let removeColor: Color
+    let showDisableToggle: Bool
+    let isLastEnabled: Bool
+    let onToggleDisabled: () -> Void
+    let onRemove: () -> Void
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(account.isDisabled ? Color.gray : (account.isExpired ? Color.orange : Color.green))
+                .frame(width: 6, height: 6)
+            Text(account.displayName)
+                .font(.caption)
+                .foregroundColor(account.isDisabled ? .secondary.opacity(0.5) : (account.isExpired ? .orange : .secondary))
+                .strikethrough(account.isDisabled)
+            if account.isExpired && !account.isDisabled {
+                Text("(expired)")
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+            }
+            if account.isDisabled {
+                Text("(disabled)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            if showDisableToggle {
+                let canDisable = account.isDisabled || !isLastEnabled
+                Button(action: onToggleDisabled) {
+                    Text(account.isDisabled ? "Enable" : "Disable")
+                        .font(.caption)
+                        .foregroundColor(account.isDisabled ? .green : (canDisable ? .orange : .secondary.opacity(0.4)))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canDisable)
+                .help(!canDisable ? "At least one account must remain enabled" : "")
+                .onHover { inside in
+                    if canDisable {
+                        if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                    }
+                }
+            }
+            Button(action: onRemove) {
+                HStack(spacing: 2) {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.caption)
+                    Text("Remove")
+                        .font(.caption)
+                }
+                .foregroundColor(removeColor)
+            }
+            .buttonStyle(.plain)
+            .onHover { inside in
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+        }
+        .padding(.leading, 28)
+    }
+}
+
+/// Vercel AI Gateway controls shown in Claude expanded section
+struct VercelGatewayControls: View {
+    @ObservedObject var serverManager: ServerManager
+    @State private var showingSaved = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: $serverManager.vercelGatewayEnabled) {
+                Text("Use Vercel AI Gateway")
+                    .font(.caption)
+            }
+            .toggleStyle(.checkbox)
+            .help("Route Claude requests through Vercel AI Gateway for safer access to your Claude Max subscription")
+            
+            if serverManager.vercelGatewayEnabled {
+                HStack(spacing: 8) {
+                    Text("Vercel API key")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    SecureField("", text: $serverManager.vercelApiKey)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 220)
+                        .font(.caption)
+                    
+                    if showingSaved {
+                        Text("Saved")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    } else {
+                        Button("Save") {
+                            showingSaved = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                showingSaved = false
+                            }
+                        }
+                        .controlSize(.small)
+                        .disabled(serverManager.vercelApiKey.isEmpty)
+                    }
+                }
+            }
+        }
+        .padding(.leading, 28)
+        .padding(.top, 4)
+    }
+}
+
+/// A row displaying a service with its connected accounts and add button
+struct ServiceRow<ExtraContent: View>: View {
+    let serviceType: ServiceType
+    let iconName: String
+    let accounts: [AuthAccount]
+    let isAuthenticating: Bool
+    let helpText: String?
+    let isEnabled: Bool
+    let isTemplateIcon: Bool
+    let customTitle: String?
+    let onConnect: () -> Void
+    let onDisconnect: (AuthAccount) -> Void
+    let onToggleDisabled: (AuthAccount) -> Void
+    let onToggleEnabled: (Bool) -> Void
+    var onExpandChange: ((Bool) -> Void)? = nil
+    @ViewBuilder var extraContent: () -> ExtraContent
+
+    @State private var isExpanded = false
+    @State private var accountToRemove: AuthAccount?
+    @State private var showingRemoveConfirmation = false
+
+    private var activeCount: Int { accounts.filter { !$0.isExpired }.count }
+    private var expiredCount: Int { accounts.filter { $0.isExpired }.count }
+    private let removeColor = Color(red: 0xeb/255, green: 0x0f/255, blue: 0x0f/255)
+    
+    private var displayTitle: String {
+        customTitle ?? serviceType.displayName
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // Header row
+            HStack {
+                // Enable/disable toggle
+                Toggle("", isOn: Binding(
+                    get: { isEnabled },
+                    set: { onToggleEnabled($0) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .help(isEnabled ? "Disable this provider" : "Enable this provider")
+
+                if let nsImage = IconCatalog.shared.image(named: iconName, resizedTo: NSSize(width: 20, height: 20), template: isTemplateIcon) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .renderingMode(isTemplateIcon ? .template : .original)
+                        .frame(width: 20, height: 20)
+                        .opacity(isEnabled ? 1.0 : 0.4)
+                }
+                Text(displayTitle)
+                    .fontWeight(.medium)
+                    .foregroundColor(isEnabled ? .primary : .secondary)
+                Spacer()
+                if isAuthenticating {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if isEnabled {
+                    Button("Add Account") {
+                        onConnect()
+                    }
+                    .controlSize(.small)
+                }
+            }
+            
+            // Account display (only shown when enabled)
+            if isEnabled {
+                let enabledCount = accounts.filter { !$0.isDisabled }.count
+                if !accounts.isEmpty {
+                    // Collapsible summary
+                    HStack(spacing: 4) {
+                        Text("\(accounts.count) connected account\(accounts.count == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundColor(.green)
+
+                        if enabledCount > 1 {
+                            Text("• Round-robin w/ auto-failover")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.leading, 28)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isExpanded.toggle()
+                        }
+                    }
+
+                    // Expanded accounts list
+                    if isExpanded {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(accounts) { account in
+                                AccountRowView(account: account, removeColor: removeColor, showDisableToggle: accounts.count > 1, isLastEnabled: !account.isDisabled && enabledCount <= 1, onToggleDisabled: {
+                                    onToggleDisabled(account)
+                                }) {
+                                    accountToRemove = account
+                                    showingRemoveConfirmation = true
+                                }
+                            }
+                            extraContent()
+                        }
+                        .padding(.top, 4)
+                    }
+                } else {
+                    Text("No connected accounts")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.leading, 28)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .help(helpText ?? "")
+        .onAppear {
+            if accounts.contains(where: { $0.isExpired }) {
+                isExpanded = true
+            }
+        }
+        .onChange(of: accounts) { newAccounts in
+            if newAccounts.contains(where: { $0.isExpired }) {
+                isExpanded = true
+            }
+        }
+        .onChange(of: isExpanded) { newValue in
+            onExpandChange?(newValue)
+        }
+        .alert("Remove Account", isPresented: $showingRemoveConfirmation) {
+            Button("Cancel", role: .cancel) {
+                accountToRemove = nil
+            }
+            Button("Remove", role: .destructive) {
+                if let account = accountToRemove {
+                    onDisconnect(account)
+                }
+                accountToRemove = nil
+            }
+        } message: {
+            if let account = accountToRemove {
+                Text("Are you sure you want to remove \(account.displayName) from \(serviceType.displayName)?")
+            }
+        }
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject var serverManager: ServerManager
+    @StateObject private var authManager = AuthManager()
+    @State private var launchAtLogin = false
+    @State private var authenticatingService: ServiceType? = nil
+    @State private var showingAuthResult = false
+    @State private var authResultMessage = ""
+    @State private var authResultSuccess = false
+    @State private var fileMonitor: DispatchSourceFileSystemObject?
+    @State private var showingQwenEmailPrompt = false
+    @State private var qwenEmail = ""
+    @State private var showingZaiApiKeyPrompt = false
+    @State private var zaiApiKey = ""
+    @State private var showingMiniMaxApiKeyPrompt = false
+    @State private var miniMaxApiKey = ""
+    @State private var showingKimiApiKeyPrompt = false
+    @State private var kimiApiKey = ""
+    @State private var pendingRefresh: DispatchWorkItem?
+    @State private var expandedRowCount = 0
+    @State private var secretKeyDraft = ""
+    
+    private enum Timing {
+        static let serverRestartDelay: TimeInterval = 0.3
+        static let refreshDebounce: TimeInterval = 0.5
+    }
+
+    private var appVersion: String {
+        if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+            return "v\(version)"
+        }
+        return ""
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    HStack {
+                        Text("Server status")
+                        Spacer()
+                        Button(action: {
+                            if serverManager.isRunning {
+                                serverManager.stop()
+                            } else {
+                                serverManager.start { _ in }
+                            }
+                        }) {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(serverManager.isRunning ? Color.green : Color.red)
+                                    .frame(width: 8, height: 8)
+                                Text(serverManager.isRunning ? "Running" : "Stopped")
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Section {
+                    Toggle("Launch at login", isOn: $launchAtLogin)
+                        .onChange(of: launchAtLogin) { newValue in
+                            toggleLaunchAtLogin(newValue)
+                        }
+
+                    HStack {
+                        Text("Auth files")
+                        Spacer()
+                        Button("Open Folder") {
+                            openAuthFolder()
+                        }
+                    }
+                }
+
+                Section("Security") {
+                    HStack(alignment: .center) {
+                        Text("Secret key")
+                            .fixedSize(horizontal: true, vertical: false)
+                            .lineLimit(1)
+                        Spacer(minLength: 12)
+                        HStack(spacing: 8) {
+                            SecureField("", text: $secretKeyDraft)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 160)
+
+                            Button("Save") {
+                                serverManager.managementSecretKey = secretKeyDraft
+                            }
+                            .fixedSize()
+                            .disabled(secretKeyDraft == serverManager.managementSecretKey)
+                        }
+                    }
+                }
+
+                Section("Services") {
+                    ServiceRow(
+                        serviceType: .antigravity,
+                        iconName: "icon-antigravity.png",
+                        accounts: authManager.accounts(for: .antigravity),
+                        isAuthenticating: authenticatingService == .antigravity,
+                        helpText: "Antigravity provides OAuth-based access to various AI models including Gemini and Claude. One login gives you access to multiple AI services.",
+                        isEnabled: serverManager.isProviderEnabled("antigravity"),
+                        isTemplateIcon: true,
+                        customTitle: nil,
+                        onConnect: { connectService(.antigravity) },
+                        onDisconnect: { account in disconnectAccount(account) },
+                        onToggleDisabled: { account in toggleAccountDisabled(account) },
+                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("antigravity", enabled: enabled) },
+                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
+                    ) { EmptyView() }
+
+                    ServiceRow(
+                        serviceType: .claude,
+                        iconName: "icon-claude.png",
+                        accounts: authManager.accounts(for: .claude),
+                        isAuthenticating: authenticatingService == .claude,
+                        helpText: nil,
+                        isEnabled: serverManager.isProviderEnabled("claude"),
+                        isTemplateIcon: true,
+                        customTitle: serverManager.vercelGatewayEnabled && !serverManager.vercelApiKey.isEmpty ? "Claude Code (via Vercel)" : nil,
+                        onConnect: { connectService(.claude) },
+                        onDisconnect: { account in disconnectAccount(account) },
+                        onToggleDisabled: { account in toggleAccountDisabled(account) },
+                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("claude", enabled: enabled) },
+                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
+                    ) {
+                        VercelGatewayControls(serverManager: serverManager)
+                    }
+
+                    ServiceRow(
+                        serviceType: .codex,
+                        iconName: "icon-codex.png",
+                        accounts: authManager.accounts(for: .codex),
+                        isAuthenticating: authenticatingService == .codex,
+                        helpText: nil,
+                        isEnabled: serverManager.isProviderEnabled("codex"),
+                        isTemplateIcon: true,
+                        customTitle: nil,
+                        onConnect: { connectService(.codex) },
+                        onDisconnect: { account in disconnectAccount(account) },
+                        onToggleDisabled: { account in toggleAccountDisabled(account) },
+                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("codex", enabled: enabled) },
+                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
+                    ) { EmptyView() }
+
+                    ServiceRow(
+                        serviceType: .gemini,
+                        iconName: "icon-gemini.png",
+                        accounts: authManager.accounts(for: .gemini),
+                        isAuthenticating: authenticatingService == .gemini,
+                        helpText: "⚠️ Note: If you're an existing Gemini user with multiple projects, authentication will use your default project. Set your desired project as default in Google AI Studio before connecting.",
+                        isEnabled: serverManager.isProviderEnabled("gemini"),
+                        isTemplateIcon: true,
+                        customTitle: nil,
+                        onConnect: { connectService(.gemini) },
+                        onDisconnect: { account in disconnectAccount(account) },
+                        onToggleDisabled: { account in toggleAccountDisabled(account) },
+                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("gemini", enabled: enabled) },
+                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
+                    ) { EmptyView() }
+
+                    ServiceRow(
+                        serviceType: .copilot,
+                        iconName: "icon-copilot.png",
+                        accounts: authManager.accounts(for: .copilot),
+                        isAuthenticating: authenticatingService == .copilot,
+                        helpText: "GitHub Copilot provides access to Claude, GPT, Gemini and other models via your Copilot subscription.",
+                        isEnabled: serverManager.isProviderEnabled("github-copilot"),
+                        isTemplateIcon: true,
+                        customTitle: nil,
+                        onConnect: { connectService(.copilot) },
+                        onDisconnect: { account in disconnectAccount(account) },
+                        onToggleDisabled: { account in toggleAccountDisabled(account) },
+                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("github-copilot", enabled: enabled) },
+                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
+                    ) { EmptyView() }
+
+                    ServiceRow(
+                        serviceType: .qwen,
+                        iconName: "icon-qwen.png",
+                        accounts: authManager.accounts(for: .qwen),
+                        isAuthenticating: authenticatingService == .qwen,
+                        helpText: nil,
+                        isEnabled: serverManager.isProviderEnabled("qwen"),
+                        isTemplateIcon: true,
+                        customTitle: nil,
+                        onConnect: { showingQwenEmailPrompt = true },
+                        onDisconnect: { account in disconnectAccount(account) },
+                        onToggleDisabled: { account in toggleAccountDisabled(account) },
+                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("qwen", enabled: enabled) },
+                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
+                    ) { EmptyView() }
+
+                    ServiceRow(
+                        serviceType: .zai,
+                        iconName: "icon-zai.png",
+                        accounts: authManager.accounts(for: .zai),
+                        isAuthenticating: authenticatingService == .zai,
+                        helpText: "Z.AI GLM provides access to GLM-4.7 and other models via API key. Get your key at https://z.ai/manage-apikey/apikey-list",
+                        isEnabled: serverManager.isProviderEnabled("zai"),
+                        isTemplateIcon: true,
+                        customTitle: nil,
+                        onConnect: { showingZaiApiKeyPrompt = true },
+                        onDisconnect: { account in disconnectAccount(account) },
+                        onToggleDisabled: { account in toggleAccountDisabled(account) },
+                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("zai", enabled: enabled) },
+                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
+                    ) { EmptyView() }
+
+                    ServiceRow(
+                        serviceType: .minimax,
+                        iconName: "icon-minimax.png",
+                        accounts: authManager.accounts(for: .minimax),
+                        isAuthenticating: authenticatingService == .minimax,
+                        helpText: "MiniMax provides access to Claude-compatible models via API key. Get your key at https://platform.minimaxi.com",
+                        isEnabled: serverManager.isProviderEnabled("minimax"),
+                        isTemplateIcon: false,
+                        customTitle: nil,
+                        onConnect: { showingMiniMaxApiKeyPrompt = true },
+                        onDisconnect: { account in disconnectAccount(account) },
+                        onToggleDisabled: { account in toggleAccountDisabled(account) },
+                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("minimax", enabled: enabled) },
+                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
+                    ) { EmptyView() }
+
+                    ServiceRow(
+                        serviceType: .kimi,
+                        iconName: "icon-kimi.png",
+                        accounts: authManager.accounts(for: .kimi),
+                        isAuthenticating: authenticatingService == .kimi,
+                        helpText: "Kimi provides access to Moonshot AI models via API key.",
+                        isEnabled: serverManager.isProviderEnabled("kimi"),
+                        isTemplateIcon: false,
+                        customTitle: nil,
+                        onConnect: { showingKimiApiKeyPrompt = true },
+                        onDisconnect: { account in disconnectAccount(account) },
+                        onToggleDisabled: { account in toggleAccountDisabled(account) },
+                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("kimi", enabled: enabled) },
+                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
+                    ) { EmptyView() }
+                }
+            }
+            .formStyle(.grouped)
+
+            Spacer()
+                .frame(height: 6)
+
+            // Footer
+            VStack(spacing: 4) {
+                Text("CCProxy \(appVersion)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.bottom, 12)
+        }
+        .frame(width: 480, height: 740)
+        .sheet(isPresented: $showingQwenEmailPrompt) {
+            VStack(spacing: 16) {
+                Text("Qwen Account Email")
+                    .font(.headline)
+                Text("Enter your Qwen account email address")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                TextField("your.email@example.com", text: $qwenEmail)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 250)
+                HStack(spacing: 12) {
+                    Button("Cancel") {
+                        showingQwenEmailPrompt = false
+                        qwenEmail = ""
+                    }
+                    Button("Continue") {
+                        showingQwenEmailPrompt = false
+                        startQwenAuth(email: qwenEmail)
+                    }
+                    .disabled(qwenEmail.isEmpty)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(24)
+            .frame(width: 350)
+        }
+        .sheet(isPresented: $showingZaiApiKeyPrompt) {
+            VStack(spacing: 16) {
+                Text("Z.AI API Key")
+                    .font(.headline)
+                Text("Enter your Z.AI API key from https://z.ai/manage-apikey/apikey-list")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                TextField("", text: $zaiApiKey)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 300)
+                HStack(spacing: 12) {
+                    Button("Cancel") {
+                        showingZaiApiKeyPrompt = false
+                        zaiApiKey = ""
+                    }
+                    Button("Add Key") {
+                        showingZaiApiKeyPrompt = false
+                        startZaiAuth(apiKey: zaiApiKey)
+                    }
+                    .disabled(zaiApiKey.isEmpty)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(24)
+            .frame(width: 400)
+        }
+        .sheet(isPresented: $showingMiniMaxApiKeyPrompt) {
+            VStack(spacing: 16) {
+                Text("MiniMax API Key")
+                    .font(.headline)
+                Text("Enter your MiniMax API key from https://platform.minimaxi.com")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                SecureField("", text: $miniMaxApiKey)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 300)
+                HStack(spacing: 12) {
+                    Button("Cancel") {
+                        showingMiniMaxApiKeyPrompt = false
+                        miniMaxApiKey = ""
+                    }
+                    Button("Add Key") {
+                        showingMiniMaxApiKeyPrompt = false
+                        startMiniMaxAuth(apiKey: miniMaxApiKey)
+                    }
+                    .disabled(miniMaxApiKey.isEmpty)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(24)
+            .frame(width: 400)
+        }
+        .sheet(isPresented: $showingKimiApiKeyPrompt) {
+            VStack(spacing: 16) {
+                Text("Kimi API Key")
+                    .font(.headline)
+                Text("Enter your Kimi API key from platform.moonshot.ai or platform.kimi.ai")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                SecureField("", text: $kimiApiKey)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 300)
+                HStack(spacing: 12) {
+                    Button("Cancel") {
+                        showingKimiApiKeyPrompt = false
+                        kimiApiKey = ""
+                    }
+                    Button("Add Key") {
+                        showingKimiApiKeyPrompt = false
+                        startKimiAuth(apiKey: kimiApiKey)
+                    }
+                    .disabled(kimiApiKey.isEmpty)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(24)
+            .frame(width: 400)
+        }
+        .onAppear {
+            secretKeyDraft = serverManager.managementSecretKey
+            authManager.checkAuthStatus()
+            checkLaunchAtLogin()
+            startMonitoringAuthDirectory()
+        }
+        .onDisappear {
+            stopMonitoringAuthDirectory()
+        }
+        .alert("Authentication Result", isPresented: $showingAuthResult) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(authResultMessage)
+        }
+    }
+
+    // MARK: - Actions
+    
+    private func toggleAccountDisabled(_ account: AuthAccount) {
+        if authManager.toggleAccountDisabled(account) {
+            authResultSuccess = true
+            authResultMessage = account.isDisabled
+                ? "✓ Enabled \(account.displayName)"
+                : "✓ Disabled \(account.displayName)"
+            showingAuthResult = true
+        } else {
+            authResultSuccess = false
+            authResultMessage = "Failed to update \(account.displayName). Please try again."
+            showingAuthResult = true
+        }
+    }
+    
+    private func openAuthFolder() {
+        let authDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
+        NSWorkspace.shared.open(authDir)
+    }
+
+    private func toggleLaunchAtLogin(_ enabled: Bool) {
+        if #available(macOS 13.0, *) {
+            do {
+                if enabled {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                NSLog("[SettingsView] Failed to toggle launch at login: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    private func checkLaunchAtLogin() {
+        if #available(macOS 13.0, *) {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
+    }
+    
+    private func connectService(_ serviceType: ServiceType) {
+        authenticatingService = serviceType
+        NSLog("[SettingsView] Starting %@ authentication", serviceType.displayName)
+        
+        let command: AuthCommand
+        switch serviceType {
+        case .claude: command = .claudeLogin
+        case .codex: command = .codexLogin
+        case .copilot: command = .copilotLogin
+        case .gemini: command = .geminiLogin
+        case .qwen:
+            authenticatingService = nil
+            return // handled separately with email prompt
+        case .antigravity: command = .antigravityLogin
+        case .zai:
+            authenticatingService = nil
+            return // handled separately with API key prompt
+        case .minimax:
+            authenticatingService = nil
+            return // handled separately with API key prompt
+        case .kimi:
+            authenticatingService = nil
+            return // handled separately with API key prompt
+        }
+        
+        serverManager.runAuthCommand(command) { success, output in
+            NSLog("[SettingsView] Auth completed - success: %d, output: %@", success, output)
+            DispatchQueue.main.async {
+                self.authenticatingService = nil
+                
+                if success {
+                    self.authResultSuccess = true
+                    // For Copilot, use the output which contains the device code
+                    if serviceType == .copilot && (output.contains("Code copied") || output.contains("code:")) {
+                        self.authResultMessage = output
+                    } else {
+                        self.authResultMessage = self.successMessage(for: serviceType)
+                    }
+                    self.showingAuthResult = true
+                } else {
+                    self.authResultSuccess = false
+                    self.authResultMessage = "Authentication failed. Please check if the browser opened and try again.\n\nDetails: \(output.isEmpty ? "No output from authentication process" : output)"
+                    self.showingAuthResult = true
+                }
+            }
+        }
+    }
+    
+    private func successMessage(for serviceType: ServiceType) -> String {
+        switch serviceType {
+        case .claude:
+            return "🌐 Browser opened for Claude Code authentication.\n\nPlease complete the login in your browser.\n\nThe app will automatically detect your credentials."
+        case .codex:
+            return "🌐 Browser opened for Codex authentication.\n\nPlease complete the login in your browser.\n\nThe app will automatically detect your credentials."
+        case .copilot:
+            return "🌐 GitHub Copilot authentication started!\n\nPlease visit github.com/login/device and enter the code shown.\n\nThe app will automatically detect your credentials."
+        case .gemini:
+            return "🌐 Browser opened for Gemini authentication.\n\nPlease complete the login in your browser.\n\n⚠️ Note: If you have multiple projects, the default project will be used."
+        case .qwen:
+            return "🌐 Browser opened for Qwen authentication.\n\nPlease complete the login in your browser."
+        case .antigravity:
+            return "🌐 Browser opened for Antigravity authentication.\n\nPlease complete the login in your browser."
+        case .zai:
+            return "✓ Z.AI API key added successfully.\n\nYou can now use GLM models through the proxy."
+        case .minimax:
+            return "✓ MiniMax API key added successfully.\n\nYou can now use MiniMax models through the proxy."
+        case .kimi:
+            return "✓ Kimi API key added successfully.\n\nYou can now use Kimi models through the proxy."
+        }
+    }
+    
+    private func startQwenAuth(email: String) {
+        authenticatingService = .qwen
+        NSLog("[SettingsView] Starting Qwen authentication")
+        
+        serverManager.runAuthCommand(.qwenLogin(email: email)) { success, output in
+            NSLog("[SettingsView] Auth completed - success: %d, output: %@", success, output)
+            DispatchQueue.main.async {
+                self.authenticatingService = nil
+                self.qwenEmail = ""
+                
+                if success {
+                    self.authResultSuccess = true
+                    self.authResultMessage = self.successMessage(for: .qwen)
+                    self.showingAuthResult = true
+                } else {
+                    self.authResultSuccess = false
+                    self.authResultMessage = "Authentication failed.\n\nDetails: \(output.isEmpty ? "No output" : output)"
+                    self.showingAuthResult = true
+                }
+            }
+        }
+    }
+    
+    private func startZaiAuth(apiKey: String) {
+        authenticatingService = .zai
+        NSLog("[SettingsView] Adding Z.AI API key")
+        
+        serverManager.saveZaiApiKey(apiKey) { success, output in
+            NSLog("[SettingsView] Z.AI key save completed - success: %d, output: %@", success, output)
+            DispatchQueue.main.async {
+                self.authenticatingService = nil
+                self.zaiApiKey = ""
+                
+                if success {
+                    self.authResultSuccess = true
+                    self.authResultMessage = self.successMessage(for: .zai)
+                    self.showingAuthResult = true
+                    self.authManager.checkAuthStatus()
+                } else {
+                    self.authResultSuccess = false
+                    self.authResultMessage = "Failed to save API key.\n\nDetails: \(output.isEmpty ? "Unknown error" : output)"
+                    self.showingAuthResult = true
+                }
+            }
+        }
+    }
+    
+    private func startMiniMaxAuth(apiKey: String) {
+        authenticatingService = .minimax
+        NSLog("[SettingsView] Adding MiniMax API key")
+
+        serverManager.saveMiniMaxApiKey(apiKey) { success, output in
+            NSLog("[SettingsView] MiniMax key save completed - success: %d, output: %@", success, output)
+            DispatchQueue.main.async {
+                self.authenticatingService = nil
+                self.miniMaxApiKey = ""
+
+                if success {
+                    self.authResultSuccess = true
+                    self.authResultMessage = self.successMessage(for: .minimax)
+                    self.showingAuthResult = true
+                    self.authManager.checkAuthStatus()
+                } else {
+                    self.authResultSuccess = false
+                    self.authResultMessage = "Failed to save API key.\n\nDetails: \(output.isEmpty ? "Unknown error" : output)"
+                    self.showingAuthResult = true
+                }
+            }
+        }
+    }
+
+    private func startKimiAuth(apiKey: String) {
+        authenticatingService = .kimi
+        NSLog("[SettingsView] Adding Kimi API key")
+
+        serverManager.saveKimiApiKey(apiKey) { success, output in
+            NSLog("[SettingsView] Kimi key save completed - success: %d, output: %@", success, output)
+            DispatchQueue.main.async {
+                self.authenticatingService = nil
+                self.kimiApiKey = ""
+
+                if success {
+                    self.authResultSuccess = true
+                    self.authResultMessage = self.successMessage(for: .kimi)
+                    self.showingAuthResult = true
+                    self.authManager.checkAuthStatus()
+                } else {
+                    self.authResultSuccess = false
+                    self.authResultMessage = "Failed to save API key.\n\nDetails: \(output.isEmpty ? "Unknown error" : output)"
+                    self.showingAuthResult = true
+                }
+            }
+        }
+    }
+
+    private func disconnectAccount(_ account: AuthAccount) {
+        let wasRunning = serverManager.isRunning
+        
+        // Stop server, delete file, restart
+        let cleanup = {
+            if self.authManager.deleteAccount(account) {
+                self.authResultSuccess = true
+                self.authResultMessage = "✓ Removed \(account.displayName) from \(account.type.displayName)"
+            } else {
+                self.authResultSuccess = false
+                self.authResultMessage = "Failed to remove account"
+            }
+            self.showingAuthResult = true
+            
+            if wasRunning {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Timing.serverRestartDelay) {
+                    self.serverManager.start { _ in }
+                }
+            }
+        }
+        
+        if wasRunning {
+            serverManager.stop { cleanup() }
+        } else {
+            cleanup()
+        }
+    }
+    
+    // MARK: - File Monitoring
+    
+    private func startMonitoringAuthDirectory() {
+        let authDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
+        try? FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
+        
+        let fileDescriptor = open(authDir.path, O_EVTONLY)
+        guard fileDescriptor >= 0 else { return }
+        
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fileDescriptor,
+            eventMask: [.write, .delete, .rename],
+            queue: DispatchQueue.main
+        )
+        
+        source.setEventHandler { [self] in
+            // Debounce rapid file changes to prevent UI flashing
+            pendingRefresh?.cancel()
+            let workItem = DispatchWorkItem {
+                NSLog("[FileMonitor] Auth directory changed - refreshing status")
+                authManager.checkAuthStatus()
+            }
+            pendingRefresh = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + Timing.refreshDebounce, execute: workItem)
+        }
+        
+        source.setCancelHandler {
+            close(fileDescriptor)
+        }
+        
+        source.resume()
+        fileMonitor = source
+    }
+    
+    private func stopMonitoringAuthDirectory() {
+        pendingRefresh?.cancel()
+        fileMonitor?.cancel()
+        fileMonitor = nil
+    }
+}
