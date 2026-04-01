@@ -29,6 +29,8 @@ CCProxy의 핵심은 **provider 선택지를 넓히는 것**입니다.
 
 즉, 하나의 provider에만 묶이는 대신, 로컬 프록시를 경유해 작업에 맞는 여러 provider의 모델을 선택하고 조합해 사용할 수 있습니다.
 
+조금 더 직관적으로 말하면, CCProxy가 지향하는 건 이런 식의 조합입니다. 예를 들어 Opus 계열 역할은 GPT 계열 provider로, Sonnet 계열 역할은 GLM 계열 provider로, Haiku 계열 역할은 MiniMax 계열 provider로 보내는 식으로 하나의 로컬 워크플로우 안에서 유연하게 섞어 쓰는 것입니다.
+
 결국 CCProxy가 지향하는 방향은 단순합니다.
 **한 provider에 갇히지 말고, 여러 provider를 유연하게 라우팅해서 쓰자.**
 

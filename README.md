@@ -28,6 +28,8 @@ It is based on `automazeio/vibeproxy`, but extends that base by making it possib
 
 That means you are not limited to a single provider's model lineup. With the local proxy as the routing layer, CCProxy is aimed at a workflow where you can choose and combine models from different providers depending on the task.
 
+In practical terms, this is the kind of setup CCProxy is meant to enable: using one provider's GPT-class model for an Opus-like route, GLM for a Sonnet-like route, and MiniMax for a Haiku-like route, all within the same local workflow.
+
 The goal is simple:
 **don’t be locked into one provider when you can route across several.**
 
