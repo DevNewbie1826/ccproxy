@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>CCProxy Changelog</title>
+    <item>
+      <title>Version 0.1.0</title>
+      <sparkle:version>1</sparkle:version>
+      <enclosure
+        url="https://github.com/DevNewbie1826/ccproxy/releases/download/v0.1.0/CCProxy.app.zip"
+        sparkle:edSignature="JCyvprxhu3j7Y/X+YbQf4Q67z2l3RLrQ22WzHOw6AMj09Gvq7ynEQtF+QAGsG/dp5Ivt619rIhybtCsZzqxAAA=="
+        length="18241845"
+        type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>
