@@ -10,8 +10,8 @@
       <sparkle:version>3</sparkle:version>
       <enclosure
         url="https://github.com/DevNewbie1826/ccproxy/releases/download/v0.1.2/CCProxy.app.zip"
-        sparkle:edSignature="zxejDRp4dgU1PRZjLZUBhRkFd5KgUsAV6r9/qVBA6feRwxR+wI+VtEybpD+/ZZ46teb2MjwJDiFOadMONhJ4BA=="
-        length="38362833"
+        sparkle:edSignature="axoAE+EzXp+FsXvjZSiywt3F/1d2JAgEtxxBSlrpWJAb3x7FJaK7ecCBzTSgL0rCgl2v12wecRAgxcoPcIKyCQ=="
+        length="18241838"
         type="application/octet-stream" />
     </item>
   </channel>
