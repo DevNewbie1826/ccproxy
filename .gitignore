@@ -2,3 +2,4 @@
 .build
 superpowers
 CCProxy.app
+.worktrees/
