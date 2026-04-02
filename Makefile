@@ -1,4 +1,4 @@
-.PHONY: help build release app install run clean test info open edit-config all
+.PHONY: help build release app install run clean test info open edit-config all sparkle-archive
 
 help: ## Show this help message
 	@echo "CCProxy - macOS menu bar app"
@@ -15,6 +15,12 @@ release: ## Build the app bundle for release
 	@echo "🔨 Building release app bundle..."
 	@./create-app-bundle.sh
 	@echo "✅ Build complete: CCProxy.app"
+
+sparkle-archive: release ## Create zip archive for Sparkle
+	@echo "🗜️  Creating Sparkle archive..."
+	@rm -f "CCProxy.app.zip"
+	@ditto -c -k --keepParent "CCProxy.app" "CCProxy.app.zip"
+	@echo "✅ Created CCProxy.app.zip"
 
 app: release ## Create the .app bundle
 
