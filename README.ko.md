@@ -73,7 +73,27 @@ CCProxy의 핵심은 **provider 선택지를 넓히는 것**입니다.
 
 ## 설치
 
-### 1) 앱 번들 빌드
+### 1) GitHub Releases에서 설치
+
+1. GitHub Releases 페이지에서 최신 `CCProxy.app.zip` 파일을 다운로드합니다.
+2. 압축을 해제합니다.
+3. `CCProxy.app`를 `/Applications` 폴더로 옮깁니다.
+4. 앱을 실행합니다.
+
+**macOS Gatekeeper 안내**
+
+처음 실행할 때 macOS가 "확인되지 않은 개발자가 배포했기 때문에 열 수 없습니다" 와 비슷한 메시지로 앱 실행을 막는 경우:
+
+1. **시스템 설정** → **개인정보 보호 및 보안** 으로 이동합니다.
+2. 아래로 내려 **보안** 섹션을 찾습니다.
+3. CCProxy가 차단되었다는 메시지 옆의 **그래도 열기** 를 누릅니다.
+4. 확인 대화상자에서 **열기** 를 누릅니다.
+
+한 번 허용하면 같은 앱에 대해서는 다시 반복하지 않아도 됩니다.
+
+### 2) 소스에서 빌드해서 설치
+
+앱 번들 빌드:
 
 ```bash
 make release
@@ -82,17 +102,21 @@ make release
 출력물:
 - `CCProxy.app`
 
-### 2) Applications 폴더에 설치
+Applications 폴더에 설치:
 
 ```bash
 make install
 ```
 
-### 3) 로컬에서 바로 실행
+로컬에서 바로 실행:
 
 ```bash
 make run
 ```
+
+### 업데이트
+
+앱 메뉴의 `Check for Updates...` 항목에서 수동으로 업데이트를 확인할 수 있습니다.
 
 ## 개발
 

@@ -36,6 +36,7 @@ cat > "$APPCAST_PATH" <<EOF
     <title>CCProxy Changelog</title>
     <item>
       <title>Version ${APP_VERSION}</title>
+      <sparkle:shortVersionString>${APP_VERSION}</sparkle:shortVersionString>
       <sparkle:version>${APP_BUILD_NUMBER}</sparkle:version>
       <enclosure
         url="${RELEASE_URL}"

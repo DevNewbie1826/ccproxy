@@ -72,7 +72,27 @@ This project also continues to rely on the upstream backend/proxy approach used 
 
 ## Installation
 
-### Option 1: Build the app bundle
+### Option 1: Install from GitHub Releases
+
+1. Download the latest `CCProxy.app.zip` from the project's GitHub Releases page.
+2. Extract the archive.
+3. Move `CCProxy.app` to `/Applications`.
+4. Launch the app.
+
+**macOS Gatekeeper notice**
+
+If macOS blocks the app on first launch with a message like "cannot be opened because it is from an unidentified developer":
+
+1. Open **System Settings** → **Privacy & Security**.
+2. Scroll down to the **Security** section.
+3. Find the message about CCProxy being blocked and click **Open Anyway**.
+4. In the confirmation dialog, click **Open**.
+
+After that, the app is saved as an exception and you should not need to repeat this for the same app.
+
+### Option 2: Build from source
+
+Build the app bundle:
 
 ```bash
 make release
@@ -81,17 +101,21 @@ make release
 Output:
 - `CCProxy.app`
 
-### Option 2: Install to Applications
+Install to Applications:
 
 ```bash
 make install
 ```
 
-### Option 3: Run locally
+Run locally:
 
 ```bash
 make run
 ```
+
+### Updates
+
+You can manually check for updates from the app menu with `Check for Updates...`.
 
 ## Development
 
