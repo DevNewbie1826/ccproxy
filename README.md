@@ -174,16 +174,47 @@ ccproxy/
 
 CCProxy can enforce a shared secret for local proxy requests.
 
-Typical local configuration uses:
+The local proxy base URL is:
+
+```text
+http://localhost:8317
+```
+
+To see which model IDs are currently exposed by the local proxy, query:
+
+```bash
+curl http://localhost:8317/v1/models
+```
+
+Use the returned model IDs when configuring Claude Code.
+
+Example `settings.json`:
 
 ```json
 {
-  "ANTHROPIC_AUTH_TOKEN": "your-secret",
-  "ANTHROPIC_BASE_URL": "http://localhost:8317"
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "local-test",
+    "ANTHROPIC_BASE_URL": "http://localhost:8317",
+    "ANTHROPIC_MODEL": "gpt-5.4",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2.7",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-5.4"
+  }
 }
 ```
 
-When a secret key is configured in the app, local proxy requests are expected to provide:
+- `ANTHROPIC_AUTH_TOKEN`: local shared secret if you enabled authentication in the app
+- `ANTHROPIC_BASE_URL`: local proxy base URL
+- `ANTHROPIC_MODEL`: default primary model
+- `ANTHROPIC_DEFAULT_HAIKU_MODEL`: model to use for Haiku-like routing
+- `ANTHROPIC_DEFAULT_SONNET_MODEL`: model to use for Sonnet-like routing
+- `ANTHROPIC_DEFAULT_OPUS_MODEL`: model to use for Opus-like routing
+
+Use the exact model names returned by `http://localhost:8317/v1/models`.
+The example values above are only examples and may differ from your local setup.
+
+When a secret key is configured in the app, `ANTHROPIC_AUTH_TOKEN` must match that same secret.
+Local proxy requests are expected to provide:
 
 ```http
 Authorization: Bearer <secret-key>
