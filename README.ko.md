@@ -175,16 +175,47 @@ ccproxy/
 
 CCProxy는 로컬 프록시 요청에 대해 shared secret 검증을 적용할 수 있습니다.
 
-보통 로컬 설정은 다음처럼 사용합니다.
+로컬 프록시 base URL은 다음과 같습니다.
+
+```text
+http://localhost:8317
+```
+
+현재 로컬 프록시가 노출하는 모델 ID를 확인하려면 다음을 실행하세요.
+
+```bash
+curl http://localhost:8317/v1/models
+```
+
+여기서 반환된 모델 ID를 Claude Code 설정에 사용하면 됩니다.
+
+예시 `settings.json`:
 
 ```json
 {
-  "ANTHROPIC_AUTH_TOKEN": "your-secret",
-  "ANTHROPIC_BASE_URL": "http://localhost:8317"
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "local-test",
+    "ANTHROPIC_BASE_URL": "http://localhost:8317",
+    "ANTHROPIC_MODEL": "gpt-5.4",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2.7",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-5.4"
+  }
 }
 ```
 
-앱에서 secret key를 설정한 경우, 로컬 프록시 요청은 아래 헤더를 포함해야 합니다.
+- `ANTHROPIC_AUTH_TOKEN`: 앱에서 로컬 인증을 켰다면 그 shared secret
+- `ANTHROPIC_BASE_URL`: 로컬 프록시 base URL
+- `ANTHROPIC_MODEL`: 기본 주 모델
+- `ANTHROPIC_DEFAULT_HAIKU_MODEL`: Haiku 계열 라우팅에 사용할 모델
+- `ANTHROPIC_DEFAULT_SONNET_MODEL`: Sonnet 계열 라우팅에 사용할 모델
+- `ANTHROPIC_DEFAULT_OPUS_MODEL`: Opus 계열 라우팅에 사용할 모델
+
+`/v1/models` 응답에 나온 정확한 모델 이름을 사용하세요.
+위 예시 값은 설명용 예시이며 로컬 환경에 따라 다를 수 있습니다.
+
+앱에서 secret key를 설정한 경우 `ANTHROPIC_AUTH_TOKEN` 값도 그 secret과 같아야 합니다.
+로컬 프록시 요청은 아래 헤더를 포함해야 합니다.
 
 ```http
 Authorization: Bearer <secret-key>
