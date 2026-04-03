@@ -2,14 +2,30 @@ import XCTest
 @testable import CCProxy
 
 final class ServerManagerConfigTests: XCTestCase {
+    private var fixtureConfigPath: String {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/config.yaml")
+            .path
+    }
+
     func testMergedConfigIncludesRemoteManagementSecretWhenSet() {
         let defaults = UserDefaults.standard
         defaults.set("test-secret", forKey: "managementSecretKey")
         defer { defaults.removeObject(forKey: "managementSecretKey") }
 
         let manager = ServerManager()
+        manager.bundledConfigPathOverride = fixtureConfigPath
+        defer { manager.bundledConfigPathOverride = nil }
         let configPath = manager.getConfigPath()
-        let contents = try! String(contentsOfFile: configPath, encoding: .utf8)
+
+        let contents: String
+        do {
+            contents = try String(contentsOfFile: configPath, encoding: .utf8)
+        } catch {
+            XCTFail("Failed to read merged config at \(configPath): \(error)")
+            return
+        }
 
         XCTAssertTrue(contents.contains("secret-key: \"test-secret\""))
     }
@@ -41,8 +57,13 @@ final class ServerManagerConfigTests: XCTestCase {
 
         let files = fixtures.map { authDir.appendingPathComponent($0.0) }
         for (index, fixture) in fixtures.enumerated() {
-            let data = try! JSONSerialization.data(withJSONObject: fixture.1, options: .prettyPrinted)
-            try! data.write(to: files[index])
+            do {
+                let data = try JSONSerialization.data(withJSONObject: fixture.1, options: .prettyPrinted)
+                try data.write(to: files[index])
+            } catch {
+                XCTFail("Failed to write auth fixture \(files[index].lastPathComponent): \(error)")
+                return
+            }
         }
         defer {
             for file in files {
@@ -51,17 +72,31 @@ final class ServerManagerConfigTests: XCTestCase {
         }
 
         let manager = ServerManager()
+        manager.bundledConfigPathOverride = fixtureConfigPath
+        defer { manager.bundledConfigPathOverride = nil }
         let configPath = manager.getConfigPath()
-        let contents = try! String(contentsOfFile: configPath, encoding: .utf8)
+
+        let contents: String
+        do {
+            contents = try String(contentsOfFile: configPath, encoding: .utf8)
+        } catch {
+            XCTFail("Failed to read merged config at \(configPath): \(error)")
+            return
+        }
 
         XCTAssertTrue(contents.contains("claude-api-key:"))
         XCTAssertTrue(contents.contains("prefix: \"zai\"\n    base-url: \"https://api.z.ai/api/anthropic\""))
-        XCTAssertTrue(contents.contains("- name: \"glm-5.1\"\n        alias: \"glm-5.1\""))
-        XCTAssertTrue(contents.contains("- name: \"glm-5-turbo\"\n        alias: \"glm-5-turbo\""))
-        XCTAssertTrue(contents.contains("- name: \"glm-4.7-flash\"\n        alias: \"glm-4.7-flash\""))
-        XCTAssertTrue(contents.contains("- name: \"glm-4.6v\"\n        alias: \"glm-4.6v\""))
+        XCTAssertTrue(contents.contains("- name: \"glm-5.1\"\n        alias: \"zai/glm-5.1\""))
+        XCTAssertTrue(contents.contains("- name: \"glm-5\"\n        alias: \"zai/glm-5\""))
+        XCTAssertTrue(contents.contains("- name: \"glm-5-turbo\"\n        alias: \"zai/glm-5-turbo\""))
+        XCTAssertTrue(contents.contains("- name: \"glm-5v-turbo\"\n        alias: \"zai/glm-5v-turbo\""))
+        XCTAssertTrue(contents.contains("- name: \"glm-4.7\"\n        alias: \"zai/glm-4.7\""))
+        XCTAssertTrue(contents.contains("- name: \"glm-4.7-flash\"\n        alias: \"zai/glm-4.7-flash\""))
+        XCTAssertTrue(contents.contains("- name: \"glm-4.6v\"\n        alias: \"zai/glm-4.6v\""))
+        XCTAssertTrue(contents.contains("- name: \"glm-4.5-air\"\n        alias: \"zai/glm-4.5-air\""))
         XCTAssertTrue(contents.contains("prefix: \"kimi\"\n    base-url: \"https://api.kimi.com/coding/\""))
+        XCTAssertTrue(contents.contains("- name: \"kimi-k2-turbo-preview\"\n        alias: \"kimi/kimi-k2-turbo-preview\""))
         XCTAssertTrue(contents.contains("prefix: \"minimax\"\n    base-url: \"https://api.minimax.io/anthropic\""))
-        XCTAssertTrue(contents.contains("- name: \"MiniMax-M2.7\"\n        alias: \"MiniMax-M2.7\""))
+        XCTAssertTrue(contents.contains("- name: \"MiniMax-M2.7\"\n        alias: \"minimax/MiniMax-M2.7\""))
     }
 }

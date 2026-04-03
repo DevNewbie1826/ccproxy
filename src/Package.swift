@@ -27,7 +27,10 @@ let package = Package(
         .testTarget(
             name: "CCProxyTests",
             dependencies: ["CCProxy"],
-            path: "Tests/CCProxyTests"
+            path: "Tests/CCProxyTests",
+            resources: [
+                .copy("Fixtures/config.yaml")
+            ]
         )
     ]
 )

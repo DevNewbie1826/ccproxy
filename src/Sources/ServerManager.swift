@@ -49,6 +49,9 @@ class ServerManager: ObservableObject {
     @Published private(set) var isRunning = false
     private(set) var port = 8328
 
+    /// Test seam: override the bundled config path used by getConfigPath()
+    var bundledConfigPathOverride: String?
+
     /// Provider enabled states - when disabled, models are excluded via oauth-excluded-models
     @Published var enabledProviders: [String: Bool] = [:] {
         didSet {
@@ -626,11 +629,15 @@ class ServerManager: ObservableObject {
 
     /// Returns the config path to use, merging bundled config with Z.AI provider and provider exclusions
     func getConfigPath() -> String {
-        guard let resourcePath = Bundle.main.resourcePath else {
-            return ""
+        let bundledConfigPath: String
+        if let bundledConfigPathOverride {
+            bundledConfigPath = bundledConfigPathOverride
+        } else {
+            guard let resourcePath = Bundle.main.resourcePath else {
+                return ""
+            }
+            bundledConfigPath = (resourcePath as NSString).appendingPathComponent("config.yaml")
         }
-
-        let bundledConfigPath = (resourcePath as NSString).appendingPathComponent("config.yaml")
         let authDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
 
         // Check for Z.AI auth files
@@ -733,13 +740,14 @@ oauth-excluded-models:
                 "https://api.z.ai/api/anthropic",
                 zaiApiKeys,
                 [
-                    ("glm-5.1", "glm-5.1"),
-                    ("glm-5", "glm-5"),
-                    ("glm-5-turbo", "glm-5-turbo"),
-                    ("glm-4.7", "glm-4.7"),
-                    ("glm-4.7-flash", "glm-4.7-flash"),
-                    ("glm-4.6v", "glm-4.6v"),
-                    ("glm-4.5-air", "glm-4.5-air")
+                    ("glm-5.1", "zai/glm-5.1"),
+                    ("glm-5", "zai/glm-5"),
+                    ("glm-5-turbo", "zai/glm-5-turbo"),
+                    ("glm-5v-turbo", "zai/glm-5v-turbo"),
+                    ("glm-4.7", "zai/glm-4.7"),
+                    ("glm-4.7-flash", "zai/glm-4.7-flash"),
+                    ("glm-4.6v", "zai/glm-4.6v"),
+                    ("glm-4.5-air", "zai/glm-4.5-air")
                 ]
             ),
             (
@@ -749,7 +757,7 @@ oauth-excluded-models:
                 "https://api.kimi.com/coding/",
                 kimiApiKeys,
                 [
-                    ("kimi-k2-turbo-preview", "kimi-k2-turbo-preview")
+                    ("kimi-k2-turbo-preview", "kimi/kimi-k2-turbo-preview")
                 ]
             ),
             (
@@ -759,7 +767,7 @@ oauth-excluded-models:
                 "https://api.minimax.io/anthropic",
                 minimaxApiKeys,
                 [
-                    ("MiniMax-M2.7", "MiniMax-M2.7")
+                    ("MiniMax-M2.7", "minimax/MiniMax-M2.7")
                 ]
             )
         ]
