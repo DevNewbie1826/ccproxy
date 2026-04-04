@@ -5,13 +5,13 @@
   <channel>
     <title>CCProxy Changelog</title>
     <item>
-      <title>Version 0.1.3</title>
-      <sparkle:shortVersionString>0.1.3</sparkle:shortVersionString>
-      <sparkle:version>4</sparkle:version>
+      <title>Version 0.1.4</title>
+      <sparkle:shortVersionString>0.1.4</sparkle:shortVersionString>
+      <sparkle:version>5</sparkle:version>
       <enclosure
-        url="https://github.com/DevNewbie1826/ccproxy/releases/download/v0.1.3/CCProxy.app.zip"
-        sparkle:edSignature="I71WSpm4G9oJNIryVPzbMgoeGxX8Ve0zfRF/RkjZejOkHZRH7ZwAad3A/3D2eaU/kkmUG9uqq0wH+ovZNgZEDw=="
-        length="18243852"
+        url="https://github.com/DevNewbie1826/ccproxy/releases/download/v0.1.4/CCProxy.app.zip"
+        sparkle:edSignature="ZVZW/S/Rt+Xi8vPOdLiukPNT4WVg5fGi+ckh8o8YQvCNeiHoYnDHGsxItewdtYSEDviuWc0of2pHzK21fAYhCg=="
+        length="18304390"
         type="application/octet-stream" />
     </item>
   </channel>
