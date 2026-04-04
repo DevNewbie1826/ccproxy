@@ -732,7 +732,7 @@ oauth-excluded-models:
         let hasKimi = !kimiApiKeys.isEmpty && isProviderEnabled("kimi")
 
         // Build Claude-compatible upstream section for supported providers
-        let claudeCompatibleProviders: [(enabled: Bool, prefix: String, comment: String, baseURL: String, apiKeys: [String], models: [(name: String, alias: String)])] = [
+        let claudeCompatibleProviders: [(enabled: Bool, prefix: String, comment: String, baseURL: String, apiKeys: [String], models: [String])] = [
             (
                 hasZai,
                 "zai",
@@ -740,14 +740,14 @@ oauth-excluded-models:
                 "https://api.z.ai/api/anthropic",
                 zaiApiKeys,
                 [
-                    ("glm-5.1", "zai/glm-5.1"),
-                    ("glm-5", "zai/glm-5"),
-                    ("glm-5-turbo", "zai/glm-5-turbo"),
-                    ("glm-5v-turbo", "zai/glm-5v-turbo"),
-                    ("glm-4.7", "zai/glm-4.7"),
-                    ("glm-4.7-flash", "zai/glm-4.7-flash"),
-                    ("glm-4.6v", "zai/glm-4.6v"),
-                    ("glm-4.5-air", "zai/glm-4.5-air")
+                    "glm-5.1",
+                    "glm-5",
+                    "glm-5-turbo",
+                    "glm-5v-turbo",
+                    "glm-4.7",
+                    "glm-4.7-flash",
+                    "glm-4.6v",
+                    "glm-4.5-air"
                 ]
             ),
             (
@@ -757,7 +757,7 @@ oauth-excluded-models:
                 "https://api.kimi.com/coding/",
                 kimiApiKeys,
                 [
-                    ("kimi-k2-turbo-preview", "kimi/kimi-k2-turbo-preview")
+                    "kimi-k2-turbo-preview"
                 ]
             ),
             (
@@ -767,7 +767,7 @@ oauth-excluded-models:
                 "https://api.minimax.io/anthropic",
                 minimaxApiKeys,
                 [
-                    ("MiniMax-M2.7", "minimax/MiniMax-M2.7")
+                    "MiniMax-M2.7"
                 ]
             )
         ]
@@ -788,8 +788,7 @@ oauth-excluded-models:
                     additionalConfig += "    base-url: \"\(provider.baseURL)\"\n"
                     additionalConfig += "    models:\n"
                     for model in provider.models {
-                        additionalConfig += "      - name: \"\(model.name)\"\n"
-                        additionalConfig += "        alias: \"\(model.alias)\"\n"
+                        additionalConfig += "      - name: \"\(model)\"\n"
                     }
                 }
             }
