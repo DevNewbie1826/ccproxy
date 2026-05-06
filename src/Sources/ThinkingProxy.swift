@@ -254,6 +254,10 @@ class ThinkingProxy {
             if let stripped = stripCacheControl(from: modifiedBody) {
                 modifiedBody = stripped
             }
+            // Canonicalize known short model aliases before forwarding
+            if let rewritten = canonicalizeTopLevelModelAlias(in: modifiedBody) {
+                modifiedBody = rewritten
+            }
         }
 
         // Normalize paths for local backend compatibility
@@ -548,51 +552,21 @@ class ThinkingProxy {
         targetConnection.stateUpdateHandler = { state in
             switch state {
             case .ready:
-                // Build the forwarded request
-                var forwardedRequest = "\(method) \(path) \(version)\r\n"
-                let excludedHeaders: Set<String> = ["content-length", "host", "transfer-encoding"]
-                var existingBetaHeader: String? = nil
-                
-                for (name, value) in headers {
-                    let lowercasedName = name.lowercased()
-                    if excludedHeaders.contains(lowercasedName) {
-                        continue
-                    }
-                    // Capture existing anthropic-beta header for merging
-                    if lowercasedName == "anthropic-beta" {
-                        existingBetaHeader = value
-                        continue
-                    }
-                    forwardedRequest += "\(name): \(value)\r\n"
-                }
-                
-                // Add/merge anthropic-beta header when thinking is enabled
+                let forwardedRequest = buildForwardedLocalRequest(
+                    method: method,
+                    path: path,
+                    version: version,
+                    headers: headers,
+                    body: body,
+                    thinkingEnabled: thinkingEnabled,
+                    targetHost: self.targetHost,
+                    targetPort: self.targetPort,
+                    interleavedThinkingHeader: BetaHeaders.interleavedThinking
+                )
+
                 if thinkingEnabled {
-                    var betaValue = BetaHeaders.interleavedThinking
-                    if let existing = existingBetaHeader {
-                        // Merge with existing header if not already present
-                        if !existing.contains(BetaHeaders.interleavedThinking) {
-                            betaValue = "\(existing),\(BetaHeaders.interleavedThinking)"
-                        } else {
-                            betaValue = existing
-                        }
-                    }
-                    forwardedRequest += "anthropic-beta: \(betaValue)\r\n"
                     NSLog("[ThinkingProxy] Added interleaved thinking beta header")
-                } else if let existing = existingBetaHeader {
-                    // Pass through existing header when thinking not enabled
-                    forwardedRequest += "anthropic-beta: \(existing)\r\n"
                 }
-                
-                // Override Host header
-                forwardedRequest += "Host: \(self.targetHost):\(self.targetPort)\r\n"
-                // Always close connections - this proxy doesn't support keep-alive/pipelining
-                forwardedRequest += "Connection: close\r\n"
-                
-                let contentLength = body.utf8.count
-                forwardedRequest += "Content-Length: \(contentLength)\r\n"
-                forwardedRequest += "\r\n"
-                forwardedRequest += body
                 
                 // Send to CLIProxyAPI
                 if let requestData = forwardedRequest.data(using: .utf8) {
@@ -607,6 +581,15 @@ class ThinkingProxy {
                                 self.receiveResponseWith404Retry(from: targetConnection, originalConnection: originalConnection, 
                                                                  method: method, path: path, version: version, 
                                                                  headers: headers, body: body)
+                            } else if isModelListRequest(method: method, path: path) {
+                                // Buffer complete model-list response for transformation
+                                self.receiveBufferedModelListResponseChunk(
+                                    from: targetConnection,
+                                    to: originalConnection,
+                                    method: method,
+                                    path: path,
+                                    accumulatedData: Data()
+                                )
                             } else {
                                 self.receiveResponse(from: targetConnection, originalConnection: originalConnection)
                             }
@@ -627,6 +610,173 @@ class ThinkingProxy {
         targetConnection.start(queue: .global(qos: .userInitiated))
     }
     
+    /**
+     Buffers eligible GET /v1/models backend responses using a deterministic
+     Content-Length boundary instead of waiting for NWConnection.isComplete.
+
+     Decision loop per received chunk:
+     1. Classify the accumulated data via `classifyBufferedModelListResponse`.
+     2. `headersIncomplete` → keep buffering.
+     3. `unsafeForTransformation` → send buffered bytes to client, then continue
+        streaming remaining backend chunks via `streamNextChunk`.
+     4. `bodyIncomplete` → keep buffering until body bytes reach Content-Length.
+     5. `bodyExact` → attempt transformation via `transformModelListHTTPResponseIfEligible`;
+        send transformed or original data, then close.
+     6. `bodyOverflow` → send buffered bytes to client, then continue streaming.
+
+     If the backend connection closes (isComplete) before reaching `bodyExact`,
+     the accumulated data is sent to the client as-is (no transformation).
+     */
+    private func receiveBufferedModelListResponseChunk(
+        from targetConnection: NWConnection,
+        to originalConnection: NWConnection,
+        method: String,
+        path: String,
+        accumulatedData: Data
+    ) {
+        targetConnection.receive(minimumIncompleteLength: 1, maximumLength: 1048576) { [weak self] data, _, isComplete, error in
+            guard let self = self else {
+                targetConnection.cancel()
+                originalConnection.cancel()
+                return
+            }
+
+            if let error = error {
+                NSLog("[ThinkingProxy] Buffered model-list receive error: \(error)")
+                targetConnection.cancel()
+                originalConnection.cancel()
+                return
+            }
+
+            var newData = accumulatedData
+            if let data = data, !data.isEmpty {
+                newData.append(data)
+            }
+
+            let classification = classifyBufferedModelListResponse(newData)
+
+            switch classification {
+            case .headersIncomplete:
+                if isComplete {
+                    // Connection closed before headers complete — send what we have
+                    self.sendAndCloseBuffered(
+                        data: newData,
+                        targetConnection: targetConnection,
+                        originalConnection: originalConnection
+                    )
+                } else {
+                    // Keep buffering
+                    self.receiveBufferedModelListResponseChunk(
+                        from: targetConnection,
+                        to: originalConnection,
+                        method: method,
+                        path: path,
+                        accumulatedData: newData
+                    )
+                }
+
+            case .unsafeForTransformation:
+                // Unsafe framing detected — send buffered bytes to client, then
+                // continue streaming remaining backend chunks unchanged.
+                NSLog("[ThinkingProxy] Model-list response unsafe for transformation, falling back to streaming")
+                self.sendBufferedThenStream(
+                    bufferedData: newData,
+                    targetConnection: targetConnection,
+                    originalConnection: originalConnection
+                )
+
+            case .bodyIncomplete:
+                if isComplete {
+                    // Connection closed before body complete — send what we have
+                    NSLog("[ThinkingProxy] Model-list response connection closed before body complete, sending buffered (\(newData.count) bytes)")
+                    self.sendAndCloseBuffered(
+                        data: newData,
+                        targetConnection: targetConnection,
+                        originalConnection: originalConnection
+                    )
+                } else {
+                    // Keep buffering until body reaches Content-Length
+                    self.receiveBufferedModelListResponseChunk(
+                        from: targetConnection,
+                        to: originalConnection,
+                        method: method,
+                        path: path,
+                        accumulatedData: newData
+                    )
+                }
+
+            case .bodyExact:
+                // Deterministic boundary reached — attempt transformation
+                let transformed = transformModelListHTTPResponseIfEligible(
+                    method: method,
+                    path: path,
+                    responseData: newData
+                )
+                let dataToSend = transformed ?? newData
+
+                if transformed != nil {
+                    NSLog("[ThinkingProxy] Transformed model-list response (original \(newData.count) bytes -> transformed \(dataToSend.count) bytes)")
+                } else {
+                    NSLog("[ThinkingProxy] Model-list response bodyExact but transformation returned nil, sending original (\(newData.count) bytes)")
+                }
+
+                self.sendAndCloseBuffered(
+                    data: dataToSend,
+                    targetConnection: targetConnection,
+                    originalConnection: originalConnection
+                )
+
+            case .bodyOverflow:
+                // Body exceeds Content-Length — unsafe, fall back to streaming
+                NSLog("[ThinkingProxy] Model-list response body overflow (buffered exceeds Content-Length), falling back to streaming")
+                self.sendBufferedThenStream(
+                    bufferedData: newData,
+                    targetConnection: targetConnection,
+                    originalConnection: originalConnection
+                )
+            }
+        }
+    }
+
+    /**
+     Sends buffered data to the client and closes both connections.
+     Used for terminal states (bodyExact, early close).
+     */
+    private func sendAndCloseBuffered(
+        data: Data,
+        targetConnection: NWConnection,
+        originalConnection: NWConnection
+    ) {
+        originalConnection.send(content: data, completion: .contentProcessed({ sendError in
+            if let sendError = sendError {
+                NSLog("[ThinkingProxy] Buffered send error: \(sendError)")
+            }
+            targetConnection.cancel()
+            originalConnection.send(content: nil, isComplete: true, completion: .contentProcessed({ _ in
+                originalConnection.cancel()
+            }))
+        }))
+    }
+
+    /**
+     Sends already-buffered bytes to the client, then continues streaming
+     remaining backend response chunks via `streamNextChunk`.
+     Used when framing is unsafe or body overflows Content-Length.
+     */
+    private func sendBufferedThenStream(
+        bufferedData: Data,
+        targetConnection: NWConnection,
+        originalConnection: NWConnection
+    ) {
+        originalConnection.send(content: bufferedData, completion: .contentProcessed({ [weak self] sendError in
+            if let sendError = sendError {
+                NSLog("[ThinkingProxy] Buffered send error during stream fallback: \(sendError)")
+            }
+            // Continue streaming remaining chunks from backend to client
+            self?.streamNextChunk(from: targetConnection, to: originalConnection)
+        }))
+    }
+
     /**
      Receives response and retries with /api/ prefix on 404
      */
@@ -803,4 +953,470 @@ class ThinkingProxy {
         }))
     }
 
+}
+
+// MARK: - Model Alias Canonicalization & Model-List Filtering Helpers
+
+/// Builds the HTTP request bytes/string forwarded to the local CLIProxyAPI backend.
+///
+/// This is the pure production seam used by `ThinkingProxy.forwardRequest`, exposed
+/// internally so tests can verify forwarded header reconstruction without opening
+/// sockets. It preserves the local-forwarding behavior: incoming `Content-Length`,
+/// `Host`, and `Transfer-Encoding` headers are excluded; `anthropic-beta` is merged
+/// when thinking is enabled; local backend `Host`, `Connection: close`, and a fresh
+/// `Content-Length` based on the final body bytes are generated; the body is appended
+/// unchanged as the final request body.
+internal func buildForwardedLocalRequest(
+    method: String,
+    path: String,
+    version: String,
+    headers: [(String, String)],
+    body: String,
+    thinkingEnabled: Bool = false,
+    targetHost: String,
+    targetPort: UInt16,
+    interleavedThinkingHeader: String = "interleaved-thinking-2025-05-14"
+) -> String {
+    var forwardedRequest = "\(method) \(path) \(version)\r\n"
+    let excludedHeaders: Set<String> = ["content-length", "host", "transfer-encoding"]
+    var existingBetaHeader: String? = nil
+
+    for (name, value) in headers {
+        let lowercasedName = name.lowercased()
+        if excludedHeaders.contains(lowercasedName) {
+            continue
+        }
+        // Capture existing anthropic-beta header for merging
+        if lowercasedName == "anthropic-beta" {
+            existingBetaHeader = value
+            continue
+        }
+        forwardedRequest += "\(name): \(value)\r\n"
+    }
+
+    // Add/merge anthropic-beta header when thinking is enabled
+    if thinkingEnabled {
+        var betaValue = interleavedThinkingHeader
+        if let existing = existingBetaHeader {
+            // Merge with existing header if not already present
+            if !existing.contains(interleavedThinkingHeader) {
+                betaValue = "\(existing),\(interleavedThinkingHeader)"
+            } else {
+                betaValue = existing
+            }
+        }
+        forwardedRequest += "anthropic-beta: \(betaValue)\r\n"
+    } else if let existing = existingBetaHeader {
+        // Pass through existing header when thinking not enabled
+        forwardedRequest += "anthropic-beta: \(existing)\r\n"
+    }
+
+    // Override Host header
+    forwardedRequest += "Host: \(targetHost):\(targetPort)\r\n"
+    // Always close connections - this proxy doesn't support keep-alive/pipelining
+    forwardedRequest += "Connection: close\r\n"
+
+    let contentLength = body.utf8.count
+    forwardedRequest += "Content-Length: \(contentLength)\r\n"
+    forwardedRequest += "\r\n"
+    forwardedRequest += body
+
+    return forwardedRequest
+}
+
+/// Exact alias-to-canonical mapping table from the spec.
+/// Only these nine mappings are recognized; nothing is inferred.
+internal let modelAliasToCanonical: [String: String] = [
+    "glm-5.1":       "zai/glm-5.1",
+    "glm-5":         "zai/glm-5",
+    "glm-5-turbo":   "zai/glm-5-turbo",
+    "glm-5v-turbo":  "zai/glm-5v-turbo",
+    "glm-4.7":       "zai/glm-4.7",
+    "glm-4.7-flash": "zai/glm-4.7-flash",
+    "glm-4.6v":      "zai/glm-4.6v",
+    "glm-4.5-air":   "zai/glm-4.5-air",
+    "MiniMax-M2.7":  "minimax/MiniMax-M2.7"
+]
+
+/// Rewrites a top-level JSON `model` string from alias to canonical form.
+///
+/// - Parameter jsonString: A raw JSON string potentially containing a top-level `"model"` key.
+/// - Returns: Serialized modified JSON string when a rewrite occurred, or `nil` for
+///   malformed JSON, non-object JSON, missing/non-string/unknown/canonical model,
+///   or nested-only model values.
+internal func canonicalizeTopLevelModelAlias(in jsonString: String) -> String? {
+    guard let jsonData = jsonString.data(using: .utf8),
+          var json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+          let model = json["model"] as? String else {
+        return nil
+    }
+
+    // Look up the alias table
+    guard let canonical = modelAliasToCanonical[model] else {
+        return nil // unknown or already canonical
+    }
+
+    json["model"] = canonical
+
+    guard let modifiedData = try? JSONSerialization.data(withJSONObject: json),
+          let modifiedString = String(data: modifiedData, encoding: .utf8) else {
+        return nil
+    }
+
+    return modifiedString
+}
+
+/// Filters a model-list response body by removing alias entries whose canonical
+/// partner is also present, and normalizes `owned_by` for retained entries with
+/// deterministic provider prefixes.
+///
+/// - Parameter bodyData: Raw JSON data of an OpenAI-compatible model-list response.
+/// - Returns: Serialized filtered JSON data when transformation succeeds safely,
+///   or `nil` for malformed JSON, unexpected shape, or entries without string `id`.
+internal func filterModelListResponseBody(_ bodyData: Data) -> Data? {
+    guard let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+          let dataArray = json["data"] as? [[String: Any]] else {
+        return nil
+    }
+
+    // Every entry must have a string `id`; fail-safe if any does not.
+    for entry in dataArray {
+        guard entry["id"] is String else {
+            return nil
+        }
+    }
+
+    // Build set of IDs present in the response
+    let presentIDs = Set(dataArray.compactMap { $0["id"] as? String })
+
+    // Build reverse map: canonical ID -> alias IDs
+    var canonicalToAliases: [String: [String]] = [:]
+    for (alias, canonical) in modelAliasToCanonical {
+        canonicalToAliases[canonical, default: []].append(alias)
+    }
+
+    // Set of alias IDs to remove (only when canonical is present)
+    var aliasesToRemove: Set<String> = []
+    for (canonical, aliases) in canonicalToAliases {
+        if presentIDs.contains(canonical) {
+            for alias in aliases {
+                aliasesToRemove.insert(alias)
+            }
+        }
+    }
+
+    // Filter entries and normalize ownership
+    var filteredEntries: [[String: Any]] = []
+    for var entry in dataArray {
+        guard let id = entry["id"] as? String else { continue }
+
+        // Skip alias entries whose canonical partner is present
+        if aliasesToRemove.contains(id) {
+            continue
+        }
+
+        // Normalize owned_by for retained entries
+        normalizeOwnedBy(for: &entry, id: id)
+        filteredEntries.append(entry)
+    }
+
+    // Rebuild the response object preserving unrelated top-level fields
+    var result = json
+    result["data"] = filteredEntries
+
+    guard let resultData = try? JSONSerialization.data(withJSONObject: result) else {
+        return nil
+    }
+
+    return resultData
+}
+
+/// Normalizes the `owned_by` field for model entries with deterministic provider prefixes.
+private func normalizeOwnedBy(for entry: inout [String: Any], id: String) {
+    if id.hasPrefix("zai/") {
+        entry["owned_by"] = "zai"
+    } else if id.hasPrefix("minimax/") {
+        entry["owned_by"] = "minimax"
+    } else if id.hasPrefix("gpt-") || id.hasPrefix("codex-") {
+        entry["owned_by"] = "openai"
+    }
+    // Other entries keep their original owned_by
+}
+
+/// Determines whether an HTTP request is an eligible `GET /v1/models` request.
+///
+/// Strips any query string from the path before matching. Returns `true` only when
+/// the method is exactly `"GET"` and the URL path component is exactly `"/v1/models"`.
+internal func isModelListRequest(method: String, path: String) -> Bool {
+    guard method == "GET" else { return false }
+
+    // Strip query string
+    let pathComponent: String
+    if let queryStart = path.firstIndex(of: "?") {
+        pathComponent = String(path[..<queryStart])
+    } else {
+        pathComponent = path
+    }
+
+    return pathComponent == "/v1/models"
+}
+
+// MARK: - Response Classification & Transformation Seams
+
+/// Classification of a buffered HTTP response for model-list transformation decisions.
+///
+/// The production buffered response path calls `classifyBufferedModelListResponse`
+/// after each received chunk to decide whether to keep buffering, attempt
+/// transformation, or fall back to streaming — without waiting indefinitely
+/// for `NWConnection.isComplete`.
+internal enum ModelListBufferClassification: Equatable {
+    /// Header section not yet complete (no `\r\n\r\n` found). Keep buffering.
+    case headersIncomplete
+    /// Response is unsafe for transformation (non-2xx, Content-Encoding, chunked TE,
+    /// missing/invalid Content-Length, malformed status line).
+    /// Production should send already-buffered bytes to the client and continue
+    /// streaming remaining backend chunks via `streamNextChunk`.
+    case unsafeForTransformation
+    /// Headers are safe and Content-Length is valid, but buffered body bytes are
+    /// less than Content-Length. Keep buffering.
+    case bodyIncomplete
+    /// Buffered body bytes exactly match Content-Length. Safe to attempt
+    /// transformation via `transformModelListHTTPResponseIfEligible`.
+    case bodyExact
+    /// Buffered body bytes exceed Content-Length. Unsafe framing.
+    /// Production should send already-buffered bytes and continue streaming.
+    case bodyOverflow
+}
+
+/// Pure classification seam for buffered HTTP response data.
+///
+/// Parses the buffered data to determine the safe next action for the
+/// production model-list response buffering path. This function makes no
+/// network calls and holds no state.
+///
+/// Uses raw byte-level search for `\r\n\r\n` to avoid Swift Character
+/// counting mismatches with UTF-8 byte offsets (e.g. `\r\n` is one Swift
+/// Character but two UTF-8 bytes).
+///
+/// - Parameter data: Buffered HTTP response bytes received so far.
+/// - Returns: Classification indicating the next production action.
+internal func classifyBufferedModelListResponse(_ data: Data) -> ModelListBufferClassification {
+    // 1. Need at least some data
+    guard !data.isEmpty else {
+        return .headersIncomplete
+    }
+
+    // 2. Find \r\n\r\n separator in raw bytes
+    guard let headerEndByteOffset = findHeaderBodySeparatorByteOffset(in: data) else {
+        return .headersIncomplete
+    }
+
+    let bodyBytesBuffered = data.count - headerEndByteOffset
+
+    // 3. Parse header section as string (header bytes before the 4-byte separator)
+    let headerData = data.subdata(in: 0..<(headerEndByteOffset - 4))
+    guard let headerSection = String(data: headerData, encoding: .utf8) else {
+        return .unsafeForTransformation
+    }
+
+    // 4. Parse status line
+    let headerLines = headerSection.components(separatedBy: "\r\n")
+    guard let statusLine = headerLines.first, statusLine.hasPrefix("HTTP/") else {
+        return .unsafeForTransformation
+    }
+
+    let statusParts = statusLine.components(separatedBy: " ")
+    guard statusParts.count >= 2,
+          let statusCode = Int(statusParts[1]),
+          statusCode >= 200, statusCode < 300 else {
+        return .unsafeForTransformation
+    }
+
+    // 5. Parse headers
+    var headers: [(String, String)] = []
+    for line in headerLines.dropFirst() {
+        guard let colonIdx = line.firstIndex(of: ":") else { continue }
+        let name = String(line[..<colonIdx])
+        let value = String(line[line.index(after: colonIdx)...]).trimmingCharacters(in: .whitespaces)
+        headers.append((name, value))
+    }
+
+    // 6. Safety checks on headers
+    if headerValueCI(headers: headers, name: "Content-Encoding") != nil {
+        return .unsafeForTransformation
+    }
+
+    if let teValue = headerValueCI(headers: headers, name: "Transfer-Encoding"),
+       teValue.lowercased() == "chunked" {
+        return .unsafeForTransformation
+    }
+
+    // 7. Content-Length check
+    guard let clStr = headerValueCI(headers: headers, name: "Content-Length"),
+          let contentLength = Int(clStr),
+          contentLength >= 0 else {
+        return .unsafeForTransformation
+    }
+
+    // 8. Compare body bytes to Content-Length
+    if bodyBytesBuffered < contentLength {
+        return .bodyIncomplete
+    } else if bodyBytesBuffered == contentLength {
+        return .bodyExact
+    } else {
+        return .bodyOverflow
+    }
+}
+
+/// Transforms a complete buffered HTTP response for eligible `GET /v1/models` requests.
+///
+/// This is the internal pure helper seam called by the production buffered response path
+/// for model-list responses. Tests exercise this same function without sockets.
+///
+/// **Eligibility:** method must be `"GET"` and URL path component must be exactly `"/v1/models"`
+/// (query string ignored). Ineligible method/path returns `nil`.
+///
+/// **Safety checks** (all must pass or `nil` is returned for pass-through):
+/// - Response must contain a valid `\r\n\r\n` header/body separator.
+/// - Status must be 2xx.
+/// - No `Content-Encoding` header present.
+/// - No `Transfer-Encoding: chunked` header present.
+/// - A valid numeric `Content-Length` must exist and **exactly** match the body byte count.
+///
+/// **Transformation:**
+/// - Applies `filterModelListResponseBody` to the body bytes.
+/// - If the filter returns `nil`, this function also returns `nil` (pass-through).
+/// - Rebuilds the HTTP response preserving the original status line and safe headers.
+/// - Removes stale `Content-Length` and `Transfer-Encoding`.
+/// - Sets `Content-Length` to the transformed body byte count.
+/// - Ensures exactly one `Connection: close` header.
+/// - Appends the transformed body bytes.
+///
+/// - Parameters:
+///   - method: The HTTP method of the original request.
+///   - path: The URL path of the original request (may include query string).
+///   - responseData: The complete buffered HTTP response bytes from the backend.
+/// - Returns: Rebuilt HTTP response `Data`, or `nil` if the response should be
+///   passed through unchanged.
+internal func transformModelListHTTPResponseIfEligible(
+    method: String,
+    path: String,
+    responseData: Data
+) -> Data? {
+    // 1. Eligibility check
+    guard isModelListRequest(method: method, path: path) else {
+        return nil
+    }
+
+    // 2. Find header/body separator at byte level
+    guard let headerEndByteOffset = findHeaderBodySeparatorByteOffset(in: responseData) else {
+        return nil
+    }
+
+    // 3. Split into header bytes and body bytes using byte offsets
+    let headerData = responseData.subdata(in: 0..<(headerEndByteOffset - 4))
+    let bodyBytes = responseData.subdata(in: headerEndByteOffset..<responseData.count)
+
+    guard let headerSection = String(data: headerData, encoding: .utf8) else {
+        return nil
+    }
+
+    // 4. Parse status line
+    let headerLines = headerSection.components(separatedBy: "\r\n")
+    guard let statusLine = headerLines.first, statusLine.hasPrefix("HTTP/") else {
+        return nil
+    }
+
+    // Extract status code from status line: "HTTP/1.1 200 OK"
+    let statusParts = statusLine.components(separatedBy: " ")
+    guard statusParts.count >= 2,
+          let statusCode = Int(statusParts[1]),
+          statusCode >= 200, statusCode < 300 else {
+        return nil
+    }
+
+    // 5. Parse headers
+    var headers: [(String, String)] = []
+    for line in headerLines.dropFirst() {
+        guard let colonIdx = line.firstIndex(of: ":") else { continue }
+        let name = String(line[..<colonIdx])
+        let value = String(line[line.index(after: colonIdx)...]).trimmingCharacters(in: .whitespaces)
+        headers.append((name, value))
+    }
+
+    // 6. Safety checks on headers
+    //    - No Content-Encoding
+    if headerValueCI(headers: headers, name: "Content-Encoding") != nil {
+        return nil
+    }
+
+    //    - No Transfer-Encoding: chunked
+    if let teValue = headerValueCI(headers: headers, name: "Transfer-Encoding"),
+       teValue.lowercased() == "chunked" {
+        return nil
+    }
+
+    //    - Valid Content-Length must exist and exactly match body bytes
+    guard let clStr = headerValueCI(headers: headers, name: "Content-Length"),
+          let contentLength = Int(clStr),
+          contentLength >= 0,
+          contentLength == bodyBytes.count else {
+        return nil
+    }
+
+    // 7. Attempt model-list body transformation
+    guard let transformedBodyData = filterModelListResponseBody(bodyBytes) else {
+        return nil
+    }
+
+    guard let transformedBodyString = String(data: transformedBodyData, encoding: .utf8) else {
+        return nil
+    }
+
+    // 8. Rebuild the HTTP response
+    let excludedHeaders: Set<String> = [
+        "content-length", "transfer-encoding", "connection"
+    ]
+
+    var rebuilt = statusLine + "\r\n"
+    for (name, value) in headers {
+        if excludedHeaders.contains(name.lowercased()) {
+            continue
+        }
+        rebuilt += "\(name): \(value)\r\n"
+    }
+    rebuilt += "Content-Length: \(transformedBodyData.count)\r\n"
+    rebuilt += "Connection: close\r\n"
+    rebuilt += "\r\n"
+    rebuilt += transformedBodyString
+
+    guard let resultData = rebuilt.data(using: .utf8) else {
+        return nil
+    }
+
+    return resultData
+}
+
+/// Case-insensitive header lookup from a list of (name, value) tuples.
+private func headerValueCI(headers: [(String, String)], name: String) -> String? {
+    return headers.first { $0.0.caseInsensitiveCompare(name) == .orderedSame }?.1
+}
+
+/// Finds the byte offset immediately after the first `\r\n\r\n` sequence in `data`.
+///
+/// Uses raw byte comparison to avoid Swift `Character` / UTF-8 byte count
+/// mismatches (e.g. `\r\n` is one extended grapheme cluster but two UTF-8 bytes).
+///
+/// - Parameter data: Raw HTTP response bytes.
+/// - Returns: Byte offset after the `\r\n\r\n` separator, or `nil` if not found.
+internal func findHeaderBodySeparatorByteOffset(in data: Data) -> Int? {
+    let pattern: [UInt8] = [0x0D, 0x0A, 0x0D, 0x0A] // \r\n\r\n
+    guard data.count >= 4 else { return nil }
+    for i in 0...(data.count - 4) {
+        if data[i] == pattern[0] && data[i + 1] == pattern[1] &&
+           data[i + 2] == pattern[2] && data[i + 3] == pattern[3] {
+            return i + 4
+        }
+    }
+    return nil
 }
