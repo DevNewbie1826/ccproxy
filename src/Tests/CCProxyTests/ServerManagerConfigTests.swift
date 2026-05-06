@@ -92,6 +92,30 @@ final class ServerManagerConfigTests: XCTestCase {
         }
     }
 
+    /// Generated config must include exactly one top-level `force-model-prefix: true` key
+    /// so prefixed provider models are exposed only through their provider-prefixed IDs.
+    func testGeneratedConfigIncludesForceModelPrefix() {
+        withTemporaryAuthDirectory { authDir in
+            writeCredential(provider: "zai", apiKey: "test-key", authDir: authDir)
+
+            let manager = makeManager(authDir: authDir)
+            let configPath = manager.getConfigPath()
+
+            guard let contents = readConfig(at: configPath) else { return }
+
+            let lines = contents.components(separatedBy: "\n")
+            let topLevelForceModelPrefix = lines.filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed == "force-model-prefix: true"
+                    && !line.hasPrefix(" ")
+                    && !line.hasPrefix("\t")
+            }
+
+            XCTAssertEqual(topLevelForceModelPrefix.count, 1,
+                           "Generated config must contain exactly one top-level force-model-prefix: true line, found \(topLevelForceModelPrefix.count)")
+        }
+    }
+
     func testOAuthDisabledProvidersGenerateExclusions() {
         withTemporaryAuthDirectory { authDir in
             writeCredential(provider: "zai", apiKey: "oauth-test-key", authDir: authDir)
