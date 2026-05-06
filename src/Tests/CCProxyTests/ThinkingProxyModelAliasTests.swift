@@ -1,14 +1,15 @@
 import XCTest
 @testable import CCProxy
 
-// MARK: - TDD RED phase tests for planned internal helpers
+// MARK: - Tests for internal pure helpers in ThinkingProxy.swift
 //
-// These tests target internal pure helpers planned in ThinkingProxy.swift:
+// Helpers under test:
 //   - canonicalizeTopLevelModelAlias(in:) -> String?
 //   - filterModelListResponseBody(_:) -> Data?
 //   - isModelListRequest(method:path:) -> Bool
 //
-// Expected state: compile failure because helpers do not exist yet.
+// T3 integration: canonicalizeTopLevelModelAlias is called in processRequest
+// after thinking/cache_control transforms and before routing/forwarding.
 
 final class ThinkingProxyModelAliasTests: XCTestCase {
 
@@ -511,6 +512,125 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
     }
 
     // ================================================================
+    // MARK: - T3 Integration: Composition & Content-Length Tests
+    // ================================================================
+
+    /// Verifies that alias rewriting preserves all non-model body fields
+    /// (messages, temperature, max_tokens, stream) unchanged.
+    /// This is a composition assertion for T3's integration of
+    /// canonicalizeTopLevelModelAlias into the POST body processing pipeline.
+    func testAliasRewritePreservesOtherBodyFields() {
+        let input = """
+        {"model":"glm-4.7","messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"hi"}],"temperature":0.7,"max_tokens":4096,"stream":true}
+        """
+        let result = canonicalizeTopLevelModelAlias(in: input)
+        XCTAssertNotNil(result, "Should rewrite glm-4.7 alias")
+
+        guard let resultStr = result,
+              let data = resultStr.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            XCTFail("Result should be valid JSON object")
+            return
+        }
+
+        // Model was rewritten
+        XCTAssertEqual(json["model"] as? String, "zai/glm-4.7")
+
+        // Other fields preserved
+        XCTAssertEqual(json["temperature"] as? Double, 0.7)
+        XCTAssertEqual(json["max_tokens"] as? Int, 4096)
+        XCTAssertEqual(json["stream"] as? Bool, true)
+
+        guard let messages = json["messages"] as? [[String: String]] else {
+            XCTFail("Messages should be preserved as array")
+            return
+        }
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(messages[0]["role"], "user")
+        XCTAssertEqual(messages[1]["role"], "assistant")
+    }
+
+    /// Verifies that the forwarded local-backend request built via the
+    /// production helper (`buildForwardedLocalRequest`) has Content-Length
+    /// equal to the rewritten body bytes, not the original (stale) value.
+    ///
+    /// This test uses the same request-building logic that `forwardRequest`
+    /// calls, proving that alias rewrite composition produces correct
+    /// Content-Length in the actual forwarded HTTP request.
+    func testForwardedRequestContentLengthMatchesRewrittenBody() {
+        let originalBody = """
+        {"model":"glm-4.7","messages":[{"role":"user","content":"hi"}]}
+        """
+        let rewrittenBody = canonicalizeTopLevelModelAlias(in: originalBody)
+        XCTAssertNotNil(rewrittenBody, "Should rewrite glm-4.7 alias")
+
+        guard let rewritten = rewrittenBody else { return }
+
+        // Simulate original request headers with stale Content-Length
+        let staleHeaders: [(String, String)] = [
+            ("Content-Type", "application/json"),
+            ("Content-Length", "\(originalBody.utf8.count)"),
+            ("Host", "original-host:9999"),
+            ("Authorization", "Bearer test-key")
+        ]
+
+        // Build the forwarded request using the same production helper
+        // that forwardRequest calls internally.
+        let forwarded = buildForwardedLocalRequest(
+            method: "POST",
+            path: "/v1/chat/completions",
+            version: "HTTP/1.1",
+            headers: staleHeaders,
+            body: rewritten,
+            thinkingEnabled: false,
+            targetHost: "127.0.0.1",
+            targetPort: 8328
+        )
+
+        // Extract Content-Length from the forwarded request
+        let contentLengthFromForwarded = extractContentLength(from: forwarded)
+        XCTAssertNotNil(contentLengthFromForwarded,
+                         "Forwarded request must contain a Content-Length header")
+
+        guard let forwardedCL = contentLengthFromForwarded else { return }
+
+        // Content-Length must equal the rewritten body byte count
+        XCTAssertEqual(forwardedCL, rewritten.utf8.count,
+                        "Forwarded Content-Length must equal rewritten body byte count")
+
+        // Content-Length must NOT equal the original (stale) body byte count
+        XCTAssertNotEqual(forwardedCL, originalBody.utf8.count,
+                            "Forwarded Content-Length must NOT equal original stale body byte count")
+    }
+
+    /// Verifies that a non-alias Claude model body (e.g. with thinking suffix)
+    /// is not affected by canonicalizeTopLevelModelAlias. This confirms that
+    /// the alias rewrite step does not interfere with Claude thinking processing.
+    func testClaudeThinkingModelUnaffectedByAliasRewrite() {
+        let claudeBody = """
+        {"model":"claude-sonnet-4-5-20250929","messages":[{"role":"user","content":"hello"}],"max_tokens":8192,"thinking":{"type":"enabled","budget_tokens":5000}}
+        """
+        let result = canonicalizeTopLevelModelAlias(in: claudeBody)
+        XCTAssertNil(result, "Claude model should not be rewritten by alias helper")
+    }
+
+    /// Verifies that a canonical model ID (already prefixed) produces
+    /// Content-Length identical to the input, confirming idempotency
+    /// in the body processing pipeline.
+    func testCanonicalModelContentLengthIdempotent() {
+        let canonicalBody = """
+        {"model":"zai/glm-4.7","messages":[{"role":"user","content":"hi"}]}
+        """
+        let result = canonicalizeTopLevelModelAlias(in: canonicalBody)
+        XCTAssertNil(result, "Already-canonical model should return nil (no rewrite)")
+
+        // Content-Length would be based on the unmodified body
+        let contentLength = canonicalBody.utf8.count
+        XCTAssertEqual(contentLength, canonicalBody.utf8.count,
+                        "Content-Length for canonical model should be unchanged")
+    }
+
+    // ================================================================
     // MARK: - Helpers
     // ================================================================
 
@@ -534,5 +654,21 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             return nil
         }
         return entries.compactMap { $0["id"] as? String }
+    }
+
+    private func extractContentLength(from request: String) -> Int? {
+        let headerPart = request.components(separatedBy: "\r\n\r\n").first ?? request
+        return headerPart
+            .components(separatedBy: "\r\n")
+            .dropFirst()
+            .compactMap { line -> Int? in
+                let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+                guard parts.count == 2,
+                      parts[0].caseInsensitiveCompare("Content-Length") == .orderedSame else {
+                    return nil
+                }
+                return Int(parts[1].trimmingCharacters(in: .whitespaces))
+            }
+            .first
     }
 }

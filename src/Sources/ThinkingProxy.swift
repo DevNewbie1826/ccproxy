@@ -254,6 +254,10 @@ class ThinkingProxy {
             if let stripped = stripCacheControl(from: modifiedBody) {
                 modifiedBody = stripped
             }
+            // Canonicalize known short model aliases before forwarding
+            if let rewritten = canonicalizeTopLevelModelAlias(in: modifiedBody) {
+                modifiedBody = rewritten
+            }
         }
 
         // Normalize paths for local backend compatibility
@@ -548,51 +552,21 @@ class ThinkingProxy {
         targetConnection.stateUpdateHandler = { state in
             switch state {
             case .ready:
-                // Build the forwarded request
-                var forwardedRequest = "\(method) \(path) \(version)\r\n"
-                let excludedHeaders: Set<String> = ["content-length", "host", "transfer-encoding"]
-                var existingBetaHeader: String? = nil
-                
-                for (name, value) in headers {
-                    let lowercasedName = name.lowercased()
-                    if excludedHeaders.contains(lowercasedName) {
-                        continue
-                    }
-                    // Capture existing anthropic-beta header for merging
-                    if lowercasedName == "anthropic-beta" {
-                        existingBetaHeader = value
-                        continue
-                    }
-                    forwardedRequest += "\(name): \(value)\r\n"
-                }
-                
-                // Add/merge anthropic-beta header when thinking is enabled
+                let forwardedRequest = buildForwardedLocalRequest(
+                    method: method,
+                    path: path,
+                    version: version,
+                    headers: headers,
+                    body: body,
+                    thinkingEnabled: thinkingEnabled,
+                    targetHost: self.targetHost,
+                    targetPort: self.targetPort,
+                    interleavedThinkingHeader: BetaHeaders.interleavedThinking
+                )
+
                 if thinkingEnabled {
-                    var betaValue = BetaHeaders.interleavedThinking
-                    if let existing = existingBetaHeader {
-                        // Merge with existing header if not already present
-                        if !existing.contains(BetaHeaders.interleavedThinking) {
-                            betaValue = "\(existing),\(BetaHeaders.interleavedThinking)"
-                        } else {
-                            betaValue = existing
-                        }
-                    }
-                    forwardedRequest += "anthropic-beta: \(betaValue)\r\n"
                     NSLog("[ThinkingProxy] Added interleaved thinking beta header")
-                } else if let existing = existingBetaHeader {
-                    // Pass through existing header when thinking not enabled
-                    forwardedRequest += "anthropic-beta: \(existing)\r\n"
                 }
-                
-                // Override Host header
-                forwardedRequest += "Host: \(self.targetHost):\(self.targetPort)\r\n"
-                // Always close connections - this proxy doesn't support keep-alive/pipelining
-                forwardedRequest += "Connection: close\r\n"
-                
-                let contentLength = body.utf8.count
-                forwardedRequest += "Content-Length: \(contentLength)\r\n"
-                forwardedRequest += "\r\n"
-                forwardedRequest += body
                 
                 // Send to CLIProxyAPI
                 if let requestData = forwardedRequest.data(using: .utf8) {
@@ -806,6 +780,73 @@ class ThinkingProxy {
 }
 
 // MARK: - Model Alias Canonicalization & Model-List Filtering Helpers
+
+/// Builds the HTTP request bytes/string forwarded to the local CLIProxyAPI backend.
+///
+/// This is the pure production seam used by `ThinkingProxy.forwardRequest`, exposed
+/// internally so tests can verify forwarded header reconstruction without opening
+/// sockets. It preserves the local-forwarding behavior: incoming `Content-Length`,
+/// `Host`, and `Transfer-Encoding` headers are excluded; `anthropic-beta` is merged
+/// when thinking is enabled; local backend `Host`, `Connection: close`, and a fresh
+/// `Content-Length` based on the final body bytes are generated; the body is appended
+/// unchanged as the final request body.
+internal func buildForwardedLocalRequest(
+    method: String,
+    path: String,
+    version: String,
+    headers: [(String, String)],
+    body: String,
+    thinkingEnabled: Bool = false,
+    targetHost: String,
+    targetPort: UInt16,
+    interleavedThinkingHeader: String = "interleaved-thinking-2025-05-14"
+) -> String {
+    var forwardedRequest = "\(method) \(path) \(version)\r\n"
+    let excludedHeaders: Set<String> = ["content-length", "host", "transfer-encoding"]
+    var existingBetaHeader: String? = nil
+
+    for (name, value) in headers {
+        let lowercasedName = name.lowercased()
+        if excludedHeaders.contains(lowercasedName) {
+            continue
+        }
+        // Capture existing anthropic-beta header for merging
+        if lowercasedName == "anthropic-beta" {
+            existingBetaHeader = value
+            continue
+        }
+        forwardedRequest += "\(name): \(value)\r\n"
+    }
+
+    // Add/merge anthropic-beta header when thinking is enabled
+    if thinkingEnabled {
+        var betaValue = interleavedThinkingHeader
+        if let existing = existingBetaHeader {
+            // Merge with existing header if not already present
+            if !existing.contains(interleavedThinkingHeader) {
+                betaValue = "\(existing),\(interleavedThinkingHeader)"
+            } else {
+                betaValue = existing
+            }
+        }
+        forwardedRequest += "anthropic-beta: \(betaValue)\r\n"
+    } else if let existing = existingBetaHeader {
+        // Pass through existing header when thinking not enabled
+        forwardedRequest += "anthropic-beta: \(existing)\r\n"
+    }
+
+    // Override Host header
+    forwardedRequest += "Host: \(targetHost):\(targetPort)\r\n"
+    // Always close connections - this proxy doesn't support keep-alive/pipelining
+    forwardedRequest += "Connection: close\r\n"
+
+    let contentLength = body.utf8.count
+    forwardedRequest += "Content-Length: \(contentLength)\r\n"
+    forwardedRequest += "\r\n"
+    forwardedRequest += body
+
+    return forwardedRequest
+}
 
 /// Exact alias-to-canonical mapping table from the spec.
 /// Only these nine mappings are recognized; nothing is inferred.
