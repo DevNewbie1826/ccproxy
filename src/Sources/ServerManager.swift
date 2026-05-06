@@ -46,11 +46,27 @@ private struct RingBuffer<Element> {
 
 class ServerManager: ObservableObject {
     private var process: Process?
+
+    /// Serial queue protecting _activeAuthProcess access across threads
+    /// (main-thread set/terminate vs termination-handler-thread clear).
+    private let authProcessQueue = DispatchQueue(label: "com.devnewbie1826.ccproxy.auth-process", qos: .userInitiated)
+    private var _activeAuthProcess: Process?
+
+    /// Thread-safe access to the tracked active auth process. Internal for test
+    /// access via @testable import.
+    var activeAuthProcess: Process? {
+        get { authProcessQueue.sync { _activeAuthProcess } }
+        set { authProcessQueue.sync { _activeAuthProcess = newValue } }
+    }
+
     @Published private(set) var isRunning = false
     private(set) var port = 8328
 
     /// Test seam: override the bundled config path used by getConfigPath()
     var bundledConfigPathOverride: String?
+
+    /// Test seam: override the auth directory used by getConfigPath()
+    var authDirectoryOverride: URL?
 
     /// Provider enabled states - when disabled, models are excluded via oauth-excluded-models
     @Published var enabledProviders: [String: Bool] = [:] {
@@ -134,8 +150,12 @@ class ServerManager: ObservableObject {
     }
     
     deinit {
-        // Ensure cleanup on deallocation
-        stop()
+        // Terminate any active auth process using the same graceful+SIGKILL path
+        terminateActiveAuthProcessIfNeeded(reason: "deinit cleanup")
+        // Avoid asynchronous self capture during deallocation; only terminate the owned process.
+        if let process, process.isRunning {
+            process.terminate()
+        }
         killOrphanedProcesses()
     }
     
@@ -155,9 +175,9 @@ class ServerManager: ObservableObject {
             return
         }
         
-        let bundledPath = (resourcePath as NSString).appendingPathComponent("cli-proxy-api-plus")
+        let bundledPath = (resourcePath as NSString).appendingPathComponent("cli-proxy-api")
         guard FileManager.default.fileExists(atPath: bundledPath) else {
-            addLog("❌ Error: cli-proxy-api-plus binary not found at \(bundledPath)")
+            addLog("❌ Error: cli-proxy-api binary not found at \(bundledPath)")
             completion(false)
             return
         }
@@ -274,14 +294,57 @@ class ServerManager: ObservableObject {
         }
     }
     
+    // MARK: - Auth Process Tracking
+    
+    /// Terminates any tracked active auth process before starting a new auth attempt.
+    /// Uses graceful SIGTERM + SIGKILL fallback. Thread-safe via authProcessQueue.
+    /// Internal for test access via @testable import.
+    func terminateActiveAuthProcessIfNeeded(reason: String) {
+        let authProcess = authProcessQueue.sync { () -> Process? in
+            let proc = _activeAuthProcess
+            _activeAuthProcess = nil
+            return proc
+        }
+
+        guard let authProcess else {
+            return
+        }
+
+        if authProcess.isRunning {
+            addLog("⚠️ Terminating previous auth process (\(authProcess.processIdentifier)) before retry: \(reason)")
+            authProcess.terminate()
+
+            let deadline = Date().addingTimeInterval(Timing.gracefulTerminationTimeout)
+            while authProcess.isRunning && Date() < deadline {
+                Thread.sleep(forTimeInterval: Timing.terminationPollInterval)
+            }
+
+            if authProcess.isRunning {
+                kill(authProcess.processIdentifier, SIGKILL)
+            }
+        }
+    }
+
+    /// Clears the active auth process reference only if it matches the given process.
+    /// Thread-safe via authProcessQueue. Internal for test access via @testable import.
+    func clearActiveAuthProcess(_ process: Process) {
+        authProcessQueue.sync {
+            if _activeAuthProcess === process {
+                _activeAuthProcess = nil
+            }
+        }
+    }
+    
     func runAuthCommand(_ command: AuthCommand, completion: @escaping (Bool, String) -> Void) {
+        // Terminate any previous auth process before starting a new one
+        terminateActiveAuthProcessIfNeeded(reason: "starting a new auth attempt")
         // Use bundled binary from app bundle
         guard let resourcePath = Bundle.main.resourcePath else {
             completion(false, "Could not find resource path")
             return
         }
         
-        let bundledPath = (resourcePath as NSString).appendingPathComponent("cli-proxy-api-plus")
+        let bundledPath = (resourcePath as NSString).appendingPathComponent("cli-proxy-api")
         guard FileManager.default.fileExists(atPath: bundledPath) else {
             completion(false, "Binary not found at \(bundledPath)")
             return
@@ -380,14 +443,16 @@ class ServerManager: ObservableObject {
         
         do {
             NSLog("[Auth] Starting process: %@ with args: %@", bundledPath, authProcess.arguments?.joined(separator: " ") ?? "none")
+            activeAuthProcess = authProcess
             try authProcess.run()
             addLog("✓ Authentication process started (PID: \(authProcess.processIdentifier)) - browser should open shortly")
             NSLog("[Auth] Process started with PID: %d", authProcess.processIdentifier)
             
             // Set up termination handler to detect when auth completes
-            authProcess.terminationHandler = { process in
+            authProcess.terminationHandler = { [weak self] process in
                 let exitCode = process.terminationStatus
                 NSLog("[Auth] Process terminated with exit code: %d", exitCode)
+                self?.clearActiveAuthProcess(process)
                 
                 if exitCode == 0 {
                     // Authentication completed successfully
@@ -463,6 +528,7 @@ class ServerManager: ObservableObject {
                 }
             }
         } catch {
+            clearActiveAuthProcess(authProcess)
             NSLog("[Auth] Failed to start: %@", error.localizedDescription)
             completion(false, "Failed to start auth process: \(error.localizedDescription)")
         }
@@ -638,7 +704,7 @@ class ServerManager: ObservableObject {
             }
             bundledConfigPath = (resourcePath as NSString).appendingPathComponent("config.yaml")
         }
-        let authDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
+        let authDir = authDirectoryOverride ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
 
         // Check for Z.AI auth files
         var zaiApiKeys: [String] = []
@@ -812,47 +878,9 @@ oauth-excluded-models:
         return logBuffer.elements()
     }
     
-    /// Kill any orphaned cli-proxy-api-plus processes that might be running
+    /// Orphan cleanup is intentionally disabled until it can be scoped to a CCProxy-owned process.
     private func killOrphanedProcesses() {
-        // First check if any processes exist using pgrep
-        let checkTask = Process()
-        checkTask.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        checkTask.arguments = ["-f", "cli-proxy-api-plus"]
-        
-        let outputPipe = Pipe()
-        checkTask.standardOutput = outputPipe
-        checkTask.standardError = Pipe() // Suppress errors
-        
-        do {
-            try checkTask.run()
-            checkTask.waitUntilExit()
-            
-            // If pgrep found processes (exit code 0), kill them
-            if checkTask.terminationStatus == 0 {
-                let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                let pids = output.components(separatedBy: .newlines).filter { !$0.isEmpty }
-                
-                if !pids.isEmpty {
-                    addLog("⚠️ Found orphaned server process(es): \(pids.joined(separator: ", "))")
-                    
-                    // Now kill them
-                    let killTask = Process()
-                    killTask.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-                    killTask.arguments = ["-9", "-f", "cli-proxy-api-plus"]
-                    
-                    try killTask.run()
-                    killTask.waitUntilExit()
-                    
-                    // Wait a moment for cleanup
-                    Thread.sleep(forTimeInterval: 0.5)
-                    addLog("✓ Cleaned up orphaned processes")
-                }
-            }
-            // Exit code 1 means no processes found - this is fine, no need to log
-        } catch {
-            // Silently fail - this is not critical
-        }
+        // T02 avoids broad process-name matching. T05 will revisit safe stale-process cleanup.
     }
 }
 
