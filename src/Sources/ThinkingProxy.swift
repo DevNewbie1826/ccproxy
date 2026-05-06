@@ -804,3 +804,142 @@ class ThinkingProxy {
     }
 
 }
+
+// MARK: - Model Alias Canonicalization & Model-List Filtering Helpers
+
+/// Exact alias-to-canonical mapping table from the spec.
+/// Only these nine mappings are recognized; nothing is inferred.
+internal let modelAliasToCanonical: [String: String] = [
+    "glm-5.1":       "zai/glm-5.1",
+    "glm-5":         "zai/glm-5",
+    "glm-5-turbo":   "zai/glm-5-turbo",
+    "glm-5v-turbo":  "zai/glm-5v-turbo",
+    "glm-4.7":       "zai/glm-4.7",
+    "glm-4.7-flash": "zai/glm-4.7-flash",
+    "glm-4.6v":      "zai/glm-4.6v",
+    "glm-4.5-air":   "zai/glm-4.5-air",
+    "MiniMax-M2.7":  "minimax/MiniMax-M2.7"
+]
+
+/// Rewrites a top-level JSON `model` string from alias to canonical form.
+///
+/// - Parameter jsonString: A raw JSON string potentially containing a top-level `"model"` key.
+/// - Returns: Serialized modified JSON string when a rewrite occurred, or `nil` for
+///   malformed JSON, non-object JSON, missing/non-string/unknown/canonical model,
+///   or nested-only model values.
+internal func canonicalizeTopLevelModelAlias(in jsonString: String) -> String? {
+    guard let jsonData = jsonString.data(using: .utf8),
+          var json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+          let model = json["model"] as? String else {
+        return nil
+    }
+
+    // Look up the alias table
+    guard let canonical = modelAliasToCanonical[model] else {
+        return nil // unknown or already canonical
+    }
+
+    json["model"] = canonical
+
+    guard let modifiedData = try? JSONSerialization.data(withJSONObject: json),
+          let modifiedString = String(data: modifiedData, encoding: .utf8) else {
+        return nil
+    }
+
+    return modifiedString
+}
+
+/// Filters a model-list response body by removing alias entries whose canonical
+/// partner is also present, and normalizes `owned_by` for retained entries with
+/// deterministic provider prefixes.
+///
+/// - Parameter bodyData: Raw JSON data of an OpenAI-compatible model-list response.
+/// - Returns: Serialized filtered JSON data when transformation succeeds safely,
+///   or `nil` for malformed JSON, unexpected shape, or entries without string `id`.
+internal func filterModelListResponseBody(_ bodyData: Data) -> Data? {
+    guard let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+          let dataArray = json["data"] as? [[String: Any]] else {
+        return nil
+    }
+
+    // Every entry must have a string `id`; fail-safe if any does not.
+    for entry in dataArray {
+        guard entry["id"] is String else {
+            return nil
+        }
+    }
+
+    // Build set of IDs present in the response
+    let presentIDs = Set(dataArray.compactMap { $0["id"] as? String })
+
+    // Build reverse map: canonical ID -> alias IDs
+    var canonicalToAliases: [String: [String]] = [:]
+    for (alias, canonical) in modelAliasToCanonical {
+        canonicalToAliases[canonical, default: []].append(alias)
+    }
+
+    // Set of alias IDs to remove (only when canonical is present)
+    var aliasesToRemove: Set<String> = []
+    for (canonical, aliases) in canonicalToAliases {
+        if presentIDs.contains(canonical) {
+            for alias in aliases {
+                aliasesToRemove.insert(alias)
+            }
+        }
+    }
+
+    // Filter entries and normalize ownership
+    var filteredEntries: [[String: Any]] = []
+    for var entry in dataArray {
+        guard let id = entry["id"] as? String else { continue }
+
+        // Skip alias entries whose canonical partner is present
+        if aliasesToRemove.contains(id) {
+            continue
+        }
+
+        // Normalize owned_by for retained entries
+        normalizeOwnedBy(for: &entry, id: id)
+        filteredEntries.append(entry)
+    }
+
+    // Rebuild the response object preserving unrelated top-level fields
+    var result = json
+    result["data"] = filteredEntries
+
+    guard let resultData = try? JSONSerialization.data(withJSONObject: result) else {
+        return nil
+    }
+
+    return resultData
+}
+
+/// Normalizes the `owned_by` field for model entries with deterministic provider prefixes.
+private func normalizeOwnedBy(for entry: inout [String: Any], id: String) {
+    if id.hasPrefix("zai/") {
+        entry["owned_by"] = "zai"
+    } else if id.hasPrefix("minimax/") {
+        entry["owned_by"] = "minimax"
+    } else if id.hasPrefix("gpt-") || id.hasPrefix("codex-") {
+        entry["owned_by"] = "openai"
+    }
+    // Other entries keep their original owned_by
+}
+
+/// Determines whether an HTTP request is an eligible `GET /v1/models` request.
+///
+/// Strips any query string from the path before matching. Returns `true` only when
+/// the method is exactly `"GET"` and the URL path component is exactly `"/v1/models"`.
+internal func isModelListRequest(method: String, path: String) -> Bool {
+    guard method == "GET" else { return false }
+
+    // Strip query string
+    let pathComponent: String
+    if let queryStart = path.firstIndex(of: "?") {
+        pathComponent = String(path[..<queryStart])
+    } else {
+        pathComponent = path
+    }
+
+    return pathComponent == "/v1/models"
+}
