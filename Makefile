@@ -1,4 +1,4 @@
-.PHONY: help build release app install run clean test info open edit-config all sparkle-archive
+.PHONY: help build release app install run clean test info open edit-config all sparkle-archive backend-version
 
 help: ## Show this help message
 	@echo "CCProxy - macOS menu bar app"
@@ -77,3 +77,13 @@ edit-config: ## Edit the bundled config.yaml
 
 # Shortcuts
 all: app ## Same as 'app'
+
+backend-version: ## Display bundled CLIProxyAPI backend version (non-mutating)
+	@echo "CLIProxyAPI backend version:"
+	@output="$$(./src/Sources/Resources/cli-proxy-api --version 2>/dev/null || true)"; \
+	if printf '%s\n' "$$output" | grep -q 'CLIProxyAPI Version'; then \
+		printf '%s\n' "$$output"; \
+	else \
+		echo "❌ Unable to read CLIProxyAPI version from src/Sources/Resources/cli-proxy-api"; \
+		exit 1; \
+	fi
