@@ -671,4 +671,692 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             }
             .first
     }
+
+    // ================================================================
+    // MARK: - T4/T5: Response Reconstruction Seam Tests
+    // ================================================================
+    //
+    // Tests for: transformModelListHTTPResponseIfEligible(method:path:responseData:) -> Data?
+    //
+    // This seam is the same function called by the buffered production response
+    // path for eligible GET /v1/models requests. No sockets or listeners needed.
+
+    // MARK: - HTTP response construction helpers
+
+    /// Builds a complete raw HTTP response as Data from status, headers, and body string.
+    private func buildHTTPResponse(
+        statusCode: Int = 200,
+        statusText: String = "OK",
+        headers: [(String, String)] = [],
+        body: String
+    ) -> Data {
+        var response = "HTTP/1.1 \(statusCode) \(statusText)\r\n"
+        for (name, value) in headers {
+            response += "\(name): \(value)\r\n"
+        }
+        response += "\r\n"
+        response += body
+        return Data(response.utf8)
+    }
+
+    /// Model-list body with at least one duplicate pair for transformation tests.
+    private var duplicateModelListBody: String {
+        """
+        {"object":"list","data":[{"id":"zai/glm-4.7","object":"model","owned_by":"unknown"},{"id":"glm-4.7","object":"model","owned_by":"unknown"},{"id":"gpt-5.5","object":"model","owned_by":"some-org"}]}
+        """
+    }
+
+    /// Parses a raw HTTP response Data into (statusLine, headers, body).
+    /// Returns nil if the response is malformed.
+    private func parseHTTPResponse(_ data: Data) -> (statusLine: String, headers: [(String, String)], body: String)? {
+        guard let responseString = String(data: data, encoding: .utf8) else { return nil }
+        guard let sepRange = responseString.range(of: "\r\n\r\n") else { return nil }
+
+        let headerSection = String(responseString[..<sepRange.lowerBound])
+        let bodyStart = responseString.index(sepRange.upperBound, offsetBy: 0)
+        let bodyString = String(responseString[bodyStart...])
+
+        let headerLines = headerSection.components(separatedBy: "\r\n")
+        guard let statusLine = headerLines.first else { return nil }
+
+        var headers: [(String, String)] = []
+        for line in headerLines.dropFirst() {
+            guard let colonIdx = line.firstIndex(of: ":") else { continue }
+            let name = String(line[..<colonIdx])
+            let value = String(line[line.index(after: colonIdx)...]).trimmingCharacters(in: .whitespaces)
+            headers.append((name, value))
+        }
+
+        return (statusLine, headers, bodyString)
+    }
+
+    /// Extracts the value of a header by case-insensitive name from parsed headers.
+    private func headerValue(in headers: [(String, String)], name: String) -> String? {
+        return headers.first { $0.0.caseInsensitiveCompare(name) == .orderedSame }?.1
+    }
+
+    /// Counts occurrences of a header by case-insensitive name.
+    private func headerCount(in headers: [(String, String)], name: String) -> Int {
+        return headers.filter { $0.0.caseInsensitiveCompare(name) == .orderedSame }.count
+    }
+
+    // MARK: - Successful transformation tests
+
+    /// Verifies that a valid 2xx GET /v1/models response with duplicate model list
+    /// is transformed: returned bytes differ, body is filtered JSON with correct
+    /// Content-Length, and Connection: close is present exactly once.
+    func testTransformModelListResponse_SuccessfulTransformation() {
+        let body = duplicateModelListBody
+        let staleContentLength = body.utf8.count
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(staleContentLength)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNotNil(result, "Eligible 2xx response with valid framing should be transformed")
+
+        guard let transformedData = result,
+              let parsed = parseHTTPResponse(transformedData) else {
+            XCTFail("Transformed response should be parseable HTTP")
+            return
+        }
+
+        // Returned bytes differ from input
+        XCTAssertNotEqual(transformedData, responseData,
+                           "Transformed response should differ from original")
+
+        // Status line preserved
+        XCTAssertTrue(parsed.statusLine.hasPrefix("HTTP/1.1 200"),
+                       "Status line should be preserved: \(parsed.statusLine)")
+
+        // Body is filtered JSON - glm-4.7 alias removed, zai/glm-4.7 retained
+        guard let bodyData = parsed.body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+              let entries = json["data"] as? [[String: Any]] else {
+            XCTFail("Body should be valid JSON with data array")
+            return
+        }
+        let ids = entries.compactMap { $0["id"] as? String }
+        XCTAssertTrue(ids.contains("zai/glm-4.7"), "Canonical zai/glm-4.7 should be retained")
+        XCTAssertFalse(ids.contains("glm-4.7"), "Alias glm-4.7 should be removed")
+        XCTAssertTrue(ids.contains("gpt-5.5"), "gpt-5.5 should remain")
+
+        // Rebuilt Content-Length equals transformed body byte count exactly
+        let clString = headerValue(in: parsed.headers, name: "Content-Length")
+        XCTAssertNotNil(clString, "Content-Length should be present")
+        if let clStr = clString, let cl = Int(clStr) {
+            XCTAssertEqual(cl, parsed.body.utf8.count,
+                            "Content-Length must equal transformed body byte count")
+        }
+
+        // Connection: close present exactly once
+        let connCount = headerCount(in: parsed.headers, name: "Connection")
+        XCTAssertEqual(connCount, 1, "Connection: close should appear exactly once")
+        XCTAssertEqual(headerValue(in: parsed.headers, name: "Connection"), "close")
+    }
+
+    /// Verifies that stale non-chunked Transfer-Encoding is removed from rebuilt response.
+    func testTransformModelListResponse_TransferEncodingRemoved() {
+        let body = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+                ("Transfer-Encoding", "identity"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNotNil(result, "Should transform response with non-chunked Transfer-Encoding")
+
+        guard let transformedData = result,
+              let parsed = parseHTTPResponse(transformedData) else {
+            XCTFail("Transformed response should be parseable HTTP")
+            return
+        }
+
+        // Transfer-Encoding must be absent from rebuilt response
+        let teCount = headerCount(in: parsed.headers, name: "Transfer-Encoding")
+        XCTAssertEqual(teCount, 0,
+                        "Transfer-Encoding should be removed from rebuilt response")
+    }
+
+    // MARK: - Pass-through tests (helper returns nil)
+
+    /// Non-2xx status should pass through (return nil).
+    func testTransformModelListResponse_Non2xxPassthrough() {
+        let body = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            statusCode: 500,
+            statusText: "Internal Server Error",
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "Non-2xx response should pass through (nil)")
+    }
+
+    /// Non-2xx status 404 should pass through.
+    func testTransformModelListResponse_404Passthrough() {
+        let body = "{\"error\":\"not found\"}"
+        let responseData = buildHTTPResponse(
+            statusCode: 404,
+            statusText: "Not Found",
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "404 response should pass through (nil)")
+    }
+
+    /// Invalid JSON body should pass through (return nil).
+    func testTransformModelListResponse_InvalidJSONPassthrough() {
+        let body = "this is not json"
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "Invalid JSON body should pass through (nil)")
+    }
+
+    /// Content-Encoding header should cause pass-through (return nil).
+    func testTransformModelListResponse_ContentEncodingPassthrough() {
+        let body = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+                ("Content-Encoding", "gzip"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "Content-Encoding response should pass through (nil)")
+    }
+
+    /// Transfer-Encoding: chunked should cause pass-through (return nil).
+    func testTransformModelListResponse_ChunkedPassthrough() {
+        let body = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Transfer-Encoding", "chunked"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "Transfer-Encoding: chunked should pass through (nil)")
+    }
+
+    /// Missing Content-Length should cause pass-through (return nil).
+    func testTransformModelListResponse_MissingContentLengthPassthrough() {
+        let body = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "Missing Content-Length should pass through (nil)")
+    }
+
+    /// Invalid (non-numeric) Content-Length should cause pass-through (return nil).
+    func testTransformModelListResponse_InvalidContentLengthPassthrough() {
+        let body = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "abc"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "Invalid Content-Length should pass through (nil)")
+    }
+
+    /// Content-Length larger than available body bytes should pass through (return nil).
+    func testTransformModelListResponse_ContentLengthTooLargePassthrough() {
+        let body = duplicateModelListBody
+        let tooLarge = body.utf8.count + 100
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(tooLarge)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "Content-Length larger than body should pass through (nil)")
+    }
+
+    /// Content-Length smaller than available body bytes should pass through (return nil).
+    func testTransformModelListResponse_ContentLengthTooSmallPassthrough() {
+        let body = duplicateModelListBody
+        let tooSmall = body.utf8.count - 10
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(tooSmall)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "Content-Length smaller than body should pass through (nil)")
+    }
+
+    /// Missing header/body separator should pass through (return nil).
+    func testTransformModelListResponse_MissingSeparatorPassthrough() {
+        // No \r\n\r\n separator, just a raw string
+        let rawResponse = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10"
+        let responseData = Data(rawResponse.utf8)
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "Missing header/body separator should pass through (nil)")
+    }
+
+    /// Unexpected shape (valid JSON but no data array) should pass through (return nil).
+    func testTransformModelListResponse_UnexpectedShapePassthrough() {
+        let body = "{\"object\":\"list\",\"models\":[]}"
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "Unexpected JSON shape (no data array) should pass through (nil)")
+    }
+
+    // MARK: - Eligibility tests through the response seam
+
+    /// GET /v1/models with a valid response should transform.
+    func testTransformModelListResponse_EligibleGetV1Models() {
+        let body = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNotNil(result, "GET /v1/models should be eligible for transformation")
+    }
+
+    /// GET /v1/models?limit=100 should transform (query string ignored for matching).
+    func testTransformModelListResponse_EligibleWithQueryString() {
+        let body = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models?limit=100",
+            responseData: responseData
+        )
+        XCTAssertNotNil(result, "GET /v1/models?limit=100 should be eligible (query ignored)")
+    }
+
+    /// POST /v1/models should not transform (ineligible method).
+    func testTransformModelListResponse_IneligiblePostMethod() {
+        let body = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "POST",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "POST /v1/models should not be eligible")
+    }
+
+    /// GET /v1/models/extra should not transform (ineligible path).
+    func testTransformModelListResponse_IneligibleSubPath() {
+        let body = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/v1/models/extra",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "GET /v1/models/extra should not be eligible")
+    }
+
+    /// GET /api/v1/models should not transform (ineligible path).
+    func testTransformModelListResponse_IneligibleApiPath() {
+        let body = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseIfEligible(
+            method: "GET",
+            path: "/api/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "GET /api/v1/models should not be eligible")
+    }
+
+    // ================================================================
+    // MARK: - T4 Fix: Buffered Response Classification Seam Tests
+    // ================================================================
+    //
+    // Tests for: classifyBufferedModelListResponse(_:) -> ModelListBufferClassification
+    //
+    // This pure classification seam drives the production buffering decision:
+    // - headersIncomplete → keep buffering
+    // - unsafeForTransformation → send buffered bytes to client, continue streaming
+    // - bodyIncomplete → keep buffering (safe headers, valid CL, not enough body yet)
+    // - bodyExact → attempt transformation via the seam
+    // - bodyOverflow → send buffered bytes to client, continue streaming
+
+    // MARK: - Headers incomplete
+
+    func testClassify_EmptyData_HeadersIncomplete() {
+        let result = classifyBufferedModelListResponse(Data())
+        XCTAssertEqual(result, .headersIncomplete,
+                        "Empty data should classify as headersIncomplete")
+    }
+
+    func testClassify_PartialHeaders_HeadersIncomplete() {
+        let partial = Data("HTTP/1.1 200 OK\r\nContent-Type: appli".utf8)
+        let result = classifyBufferedModelListResponse(partial)
+        XCTAssertEqual(result, .headersIncomplete,
+                        "Partial headers without \\r\\n\\r\\n should classify as headersIncomplete")
+    }
+
+    func testClassify_StatusLineOnly_HeadersIncomplete() {
+        let partial = Data("HTTP/1.1 200 OK\r\n".utf8)
+        let result = classifyBufferedModelListResponse(partial)
+        XCTAssertEqual(result, .headersIncomplete,
+                        "Status line only (no \\r\\n\\r\\n) should classify as headersIncomplete")
+    }
+
+    // MARK: - Unsafe for transformation
+
+    func testClassify_MissingContentLength_Unsafe() {
+        let response = buildHTTPResponse(
+            headers: [("Content-Type", "application/json")],
+            body: duplicateModelListBody
+        )
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .unsafeForTransformation,
+                        "Missing Content-Length should classify as unsafeForTransformation")
+    }
+
+    func testClassify_InvalidContentLength_Unsafe() {
+        let response = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "abc"),
+            ],
+            body: duplicateModelListBody
+        )
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .unsafeForTransformation,
+                        "Invalid Content-Length should classify as unsafeForTransformation")
+    }
+
+    func testClassify_NegativeContentLength_Unsafe() {
+        let response = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "-1"),
+            ],
+            body: duplicateModelListBody
+        )
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .unsafeForTransformation,
+                        "Negative Content-Length should classify as unsafeForTransformation")
+    }
+
+    func testClassify_ContentEncoding_Unsafe() {
+        let body = duplicateModelListBody
+        let response = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+                ("Content-Encoding", "gzip"),
+            ],
+            body: body
+        )
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .unsafeForTransformation,
+                        "Content-Encoding should classify as unsafeForTransformation")
+    }
+
+    func testClassify_ChunkedTransferEncoding_Unsafe() {
+        let response = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Transfer-Encoding", "chunked"),
+            ],
+            body: duplicateModelListBody
+        )
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .unsafeForTransformation,
+                        "Transfer-Encoding: chunked should classify as unsafeForTransformation")
+    }
+
+    func testClassify_Non2xxStatus_Unsafe() {
+        let body = duplicateModelListBody
+        let response = buildHTTPResponse(
+            statusCode: 500,
+            statusText: "Internal Server Error",
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .unsafeForTransformation,
+                        "500 status should classify as unsafeForTransformation")
+    }
+
+    func testClassify_404Status_Unsafe() {
+        let body = "{\"error\":\"not found\"}"
+        let response = buildHTTPResponse(
+            statusCode: 404,
+            statusText: "Not Found",
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .unsafeForTransformation,
+                        "404 status should classify as unsafeForTransformation")
+    }
+
+    func testClassify_MalformedStatusLine_Unsafe() {
+        let response = Data("GARBAGE\r\nContent-Length: 5\r\n\r\nhello".utf8)
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .unsafeForTransformation,
+                        "Non-HTTP status line should classify as unsafeForTransformation")
+    }
+
+    // MARK: - Body incomplete (safe headers, CL present, body < CL)
+
+    func testClassify_BodySmallerThanCL_BodyIncomplete() {
+        let body = duplicateModelListBody
+        let fullCL = body.utf8.count
+        // Build response with correct CL but only partial body
+        let partialBody = String(body.prefix(body.utf8.count / 2))
+        let response = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(fullCL)"),
+            ],
+            body: partialBody
+        )
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .bodyIncomplete,
+                        "Body bytes < Content-Length should classify as bodyIncomplete")
+    }
+
+    func testClassify_ZeroCLWithEmptyBody_BodyExact() {
+        let response = buildHTTPResponse(
+            headers: [("Content-Length", "0")],
+            body: ""
+        )
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .bodyExact,
+                        "Zero Content-Length with empty body should classify as bodyExact")
+    }
+
+    // MARK: - Body exact (safe headers, CL matches body bytes)
+
+    func testClassify_BodyMatchesCL_BodyExact() {
+        let body = duplicateModelListBody
+        let response = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .bodyExact,
+                        "Body bytes == Content-Length should classify as bodyExact")
+    }
+
+    func testClassify_BodyMatchesCL_WithExtraSafeHeaders_BodyExact() {
+        let body = duplicateModelListBody
+        let response = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+                ("X-Custom", "value"),
+            ],
+            body: body
+        )
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .bodyExact,
+                        "Extra safe headers should not prevent bodyExact classification")
+    }
+
+    // MARK: - Body overflow (body bytes > CL)
+
+    func testClassify_BodyExceedsCL_BodyOverflow() {
+        let body = duplicateModelListBody
+        let tooSmall = body.utf8.count - 10
+        let response = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(tooSmall)"),
+            ],
+            body: body
+        )
+        let result = classifyBufferedModelListResponse(response)
+        XCTAssertEqual(result, .bodyOverflow,
+                        "Body bytes > Content-Length should classify as bodyOverflow")
+    }
 }
