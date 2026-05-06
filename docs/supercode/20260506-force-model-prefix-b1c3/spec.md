@@ -8,9 +8,10 @@ Hotfix CCProxy so Z.AI/Kimi/MiniMax Claude-compatible provider models are expose
 
 # Current State
 
-- CCProxy v0.1.6 bundles official CLIProxyAPI 6.10.8 as `src/Sources/Resources/cli-proxy-api`.
+- CCProxy v0.1.7 bundles official CLIProxyAPI 6.10.8 as `src/Sources/Resources/cli-proxy-api`.
+- CCProxy v0.1.7 already added proxy-layer model-list de-duplication and request alias canonicalization, but the user-reported post-release behavior still does not satisfy the expected model exposure behavior.
 - CCProxy generates Z.AI/Kimi/MiniMax provider entries under `claude-api-key` with `prefix`, `base-url`, and `models`.
-- Local reproduction against `/v1/models` showed duplicated Z.AI models, for example:
+- Local reproduction against the backend `/v1/models` showed duplicated Z.AI models, for example:
   - `glm-5`
   - `zai/glm-5`
   - `glm-5-turbo`
@@ -22,6 +23,8 @@ Hotfix CCProxy so Z.AI/Kimi/MiniMax Claude-compatible provider models are expose
 
 CCProxy-generated configuration should set `force-model-prefix: true` so provider-prefixed models such as `zai/glm-5` remain available while raw duplicates such as `glm-5` are not exposed from prefixed provider credentials.
 
+This is an additional v0.1.7 follow-up hotfix targeting backend-generated model exposure at the configuration source, not a replacement for the existing proxy-layer compatibility behavior.
+
 # Scope
 
 ## In Scope
@@ -29,7 +32,7 @@ CCProxy-generated configuration should set `force-model-prefix: true` so provide
 - Add `force-model-prefix: true` to CCProxy's bundled CLIProxyAPI config.
 - Add/update tests that verify generated config includes `force-model-prefix: true`.
 - Verify the generated config and live backend `/v1/models` behavior no longer exposes raw Z.AI model duplicates when Z.AI credentials are present.
-- Prepare a hotfix PR and, after review/merge, release as the next patch version.
+- Prepare a hotfix PR and, after review/merge, release as the next patch version after v0.1.7.
 
 ## Out of Scope
 
@@ -69,3 +72,4 @@ CCProxy-generated configuration should set `force-model-prefix: true` so provide
 # Revisions
 
 - 2026-05-06: Initial hotfix spec drafted after reproducing duplicate `glm-*` and `zai/glm-*` model exposure and confirming CLIProxyAPI `force-model-prefix` behavior.
+- 2026-05-06: Revised current state to reflect that v0.1.7 proxy-layer de-duplication was already released but user-reported behavior still requires a config-source follow-up hotfix.
