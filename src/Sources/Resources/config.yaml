@@ -16,6 +16,9 @@ auth-dir: "~/.cli-proxy-api"
 debug: false
 logging-to-file: false
 
+# Force provider-prefixed model IDs for prefixed credentials
+force-model-prefix: true
+
 # Usage statistics
 usage-statistics-enabled: true
 

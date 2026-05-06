@@ -1,3 +1,4 @@
 port: 8317
 log: true
 secret-key: ""
+force-model-prefix: true
