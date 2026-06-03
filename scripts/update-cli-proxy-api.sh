@@ -8,8 +8,12 @@ LATEST_API_URL="https://api.github.com/repos/${OWNER_REPO}/releases/latest"
 
 DRY_RUN=false
 CLEANUP_DIR=""
+STAGING_FILE=""
 
 cleanup() {
+  if [ -n "${STAGING_FILE:-}" ] && [ -e "${STAGING_FILE}" ]; then
+    rm -f "${STAGING_FILE}"
+  fi
   if [ -n "${CLEANUP_DIR:-}" ] && [ -d "${CLEANUP_DIR}" ]; then
     rm -rf "${CLEANUP_DIR}"
   fi
@@ -227,7 +231,10 @@ main() {
   fi
 
   echo "Updating $TARGET_BINARY..."
-  local staging="$TARGET_BINARY.tmp"
+  local staging="$TARGET_BINARY.staging.$$"
+  STAGING_FILE="$staging"
+  local backup="$tmp_dir/cli-proxy-api.backup"
+  cp "$TARGET_BINARY" "$backup"
   cp "$exe_path" "$staging"
   chmod 755 "$staging"
 
@@ -238,6 +245,7 @@ main() {
   fi
 
   mv "$staging" "$TARGET_BINARY"
+  STAGING_FILE=""
 
   echo "Validating updated binary..."
   local version_output make_rc
@@ -245,13 +253,15 @@ main() {
   if [ "$make_rc" -ne 0 ]; then
     echo "ERROR:make backend-version failed (exit $make_rc)" >&2
     echo "$version_output" >&2
-    git -C "$ROOT_DIR" checkout -- src/Sources/Resources/cli-proxy-api
+    cp "$backup" "$TARGET_BINARY"
+    chmod 755 "$TARGET_BINARY"
     exit 1
   fi
   if ! printf '%s\n' "$version_output" | grep -q 'CLIProxyAPI Version'; then
     echo "ERROR:Backend validation failed: CLIProxyAPI Version not found in output" >&2
     echo "$version_output" >&2
-    git -C "$ROOT_DIR" checkout -- src/Sources/Resources/cli-proxy-api
+    cp "$backup" "$TARGET_BINARY"
+    chmod 755 "$TARGET_BINARY"
     exit 1
   fi
 
