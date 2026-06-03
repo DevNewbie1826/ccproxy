@@ -44,6 +44,7 @@ import sys, json
 data = json.load(sys.stdin)
 tag = data.get("tag_name", "")
 if not tag:
+    print("ERROR:Release has no tag_name", file=sys.stderr)
     sys.exit(1)
 print(tag)
 ')"
@@ -180,7 +181,7 @@ main() {
     -o "$tmp_dir/checksums.txt" "$checksums_url"
 
   local expected_checksum
-  expected_checksum="$(grep -F "$archive_name" "$tmp_dir/checksums.txt" | awk '{print $1}')"
+  expected_checksum="$(grep -F "$archive_name" "$tmp_dir/checksums.txt" | awk '{print $1}' || true)"
   if [ -z "$expected_checksum" ]; then
     echo "ERROR:$archive_name not found in checksums.txt" >&2
     exit 1
@@ -239,10 +240,16 @@ main() {
   mv "$staging" "$TARGET_BINARY"
 
   echo "Validating updated binary..."
-  local version_output
-  version_output="$(make -C "$ROOT_DIR" backend-version 2>&1)" || true
+  local version_output make_rc
+  version_output="$(make -C "$ROOT_DIR" backend-version 2>&1)" && make_rc=$? || make_rc=$?
+  if [ "$make_rc" -ne 0 ]; then
+    echo "ERROR:make backend-version failed (exit $make_rc)" >&2
+    echo "$version_output" >&2
+    git -C "$ROOT_DIR" checkout -- src/Sources/Resources/cli-proxy-api
+    exit 1
+  fi
   if ! printf '%s\n' "$version_output" | grep -q 'CLIProxyAPI Version'; then
-    echo "ERROR:Backend validation failed" >&2
+    echo "ERROR:Backend validation failed: CLIProxyAPI Version not found in output" >&2
     echo "$version_output" >&2
     git -C "$ROOT_DIR" checkout -- src/Sources/Resources/cli-proxy-api
     exit 1
