@@ -3,10 +3,6 @@ import Foundation
 enum ServiceType: String, CaseIterable {
     case claude
     case codex
-    case copilot = "github-copilot"
-    case gemini
-    case qwen
-    case antigravity
     case zai
     case minimax
     case kimi
@@ -15,10 +11,6 @@ enum ServiceType: String, CaseIterable {
         switch self {
         case .claude: return "Claude Code"
         case .codex: return "Codex"
-        case .copilot: return "GitHub Copilot"
-        case .gemini: return "Gemini"
-        case .qwen: return "Qwen"
-        case .antigravity: return "Antigravity"
         case .zai: return "Z.AI GLM"
         case .minimax: return "MiniMax"
         case .kimi: return "Kimi"
@@ -30,7 +22,7 @@ enum ServiceType: String, CaseIterable {
 struct AuthAccount: Identifiable, Equatable {
     let id: String  // filename
     let email: String?
-    let login: String?  // for Copilot
+    let login: String?
     let type: ServiceType
     let expired: Date?
     let filePath: URL

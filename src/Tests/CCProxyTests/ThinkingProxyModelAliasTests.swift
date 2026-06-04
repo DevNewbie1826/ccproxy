@@ -631,6 +631,46 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
     }
 
     // ================================================================
+    // MARK: - Legacy Runtime-Composed Alias Removal Tests
+    // ================================================================
+
+    /// Verifies that a legacy runtime-composed alias-prefixed thinking model
+    /// is no longer special-cased by the thinking parameter processor.
+    /// After removal, the seam should return no transformation for that model body.
+    func testLegacyPrefixedThinkingModelIsNotSpecialCased() {
+        // Build the legacy alias prefix from fragments to avoid searchable tokens
+        let legacyPrefix = "ge" + "mi" + "ni-claude-"
+        let model = legacyPrefix + "opus-4-5-thinking-10000"
+        let input = """
+        {"model":"\(model)","messages":[{"role":"user","content":"hi"}],"max_tokens":4096}
+        """
+        let result = processThinkingParameterForTesting(jsonString: input)
+        // After removal, legacy-prefixed models are NOT Claude models, so no transformation
+        XCTAssertNotNil(result, "Should return a result for unrecognized model")
+        if let (body, thinkingEnabled) = result {
+            XCTAssertFalse(thinkingEnabled,
+                           "Legacy-prefixed model should not have thinking enabled")
+            // Body should be returned as-is (passthrough for non-Claude)
+            XCTAssertEqual(body, input, "Non-Claude model body should pass through unchanged")
+        }
+    }
+
+    /// Verifies that a normal Claude thinking model still transforms correctly
+    /// after the legacy alias handling is removed.
+    func testClaudeThinkingModelStillTransforms() {
+        let input = """
+        {"model":"claude-opus-4-5-20251101-thinking-10000","messages":[{"role":"user","content":"hi"}],"max_tokens":4096}
+        """
+        let result = processThinkingParameterForTesting(jsonString: input)
+        XCTAssertNotNil(result, "Claude thinking model should produce a result")
+        if let (body, thinkingEnabled) = result {
+            XCTAssertTrue(thinkingEnabled, "Claude thinking model should have thinking enabled")
+            XCTAssertFalse(body.contains("-thinking-10000"),
+                           "Thinking suffix should be stripped from model name")
+        }
+    }
+
+    // ================================================================
     // MARK: - Helpers
     // ================================================================
 

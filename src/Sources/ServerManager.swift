@@ -98,10 +98,6 @@ class ServerManager: ObservableObject {
         }
     }
 
-    /// Helper class to capture output text across closures
-    private class OutputCapture {
-        var text = ""
-    }
     private var logBuffer: RingBuffer<String>
     private let maxLogLines = 1000
     private let processQueue = DispatchQueue(label: "com.devnewbie1826.ccproxy.server-process", qos: .userInitiated)
@@ -117,11 +113,7 @@ class ServerManager: ObservableObject {
     /// OAuth provider keys used in config.yaml oauth-excluded-models
     static let oauthProviderKeys: [String: String] = [
         "claude": "claude",
-        "codex": "codex",
-        "gemini": "gemini-cli",
-        "github-copilot": "github-copilot",
-        "antigravity": "antigravity",
-        "qwen": "qwen"
+        "codex": "codex"
     ]
 
     init() {
@@ -356,22 +348,11 @@ class ServerManager: ObservableObject {
         // Get the config path
         let configPath = (resourcePath as NSString).appendingPathComponent("config.yaml")
         
-        var qwenEmail: String?
-        
         switch command {
         case .claudeLogin:
             authProcess.arguments = ["--config", configPath, "-claude-login"]
         case .codexLogin:
             authProcess.arguments = ["--config", configPath, "-codex-login"]
-        case .copilotLogin:
-            authProcess.arguments = ["--config", configPath, "-github-copilot-login"]
-        case .geminiLogin:
-            authProcess.arguments = ["--config", configPath, "-login"]
-        case .qwenLogin(let email):
-            authProcess.arguments = ["--config", configPath, "-qwen-login"]
-            qwenEmail = email
-        case .antigravityLogin:
-            authProcess.arguments = ["--config", configPath, "-antigravity-login"]
         }
         
         // Create pipes for output
@@ -382,32 +363,6 @@ class ServerManager: ObservableObject {
         authProcess.standardError = errorPipe
         authProcess.standardInput = inputPipe
         
-        // For Copilot, we need to capture the device code from output
-        let capture = OutputCapture()
-        
-        if case .copilotLogin = command {
-            outputPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if let str = String(data: data, encoding: .utf8), !str.isEmpty {
-                    capture.text += str
-                    NSLog("[Auth] Copilot output: %@", str)
-                }
-            }
-        }
-        
-        // For Gemini login, automatically send newline to accept default project
-        if case .geminiLogin = command {
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 3.0) {
-                // Send newline after 3 seconds to accept default project choice
-                if authProcess.isRunning {
-                    if let data = "\n".data(using: .utf8) {
-                        try? inputPipe.fileHandleForWriting.write(contentsOf: data)
-                        NSLog("[Auth] Sent newline to accept default project")
-                    }
-                }
-            }
-        }
-
         // For Codex login, avoid blocking on the manual callback prompt after ~15s.
         if case .codexLogin = command {
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 12.0) {
@@ -416,23 +371,6 @@ class ServerManager: ObservableObject {
                     if let data = "\n".data(using: .utf8) {
                         try? inputPipe.fileHandleForWriting.write(contentsOf: data)
                         NSLog("[Auth] Sent newline to keep Codex login waiting for callback")
-                    }
-                }
-            }
-        }
-        
-        // For Qwen login, automatically send email after OAuth completes
-        // NOTE: 10 second delay chosen to ensure OAuth browser flow completes before submitting email.
-        // This is a conservative estimate - OAuth typically completes in 5-8 seconds, but network
-        // conditions and user interaction time can vary. Future improvement: monitor authProcess
-        // output or termination handler to detect OAuth completion signal and submit immediately.
-        if let email = qwenEmail {
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 10.0) {
-                // Send email after OAuth completion
-                if authProcess.isRunning {
-                    if let data = "\(email)\n".data(using: .utf8) {
-                        try? inputPipe.fileHandleForWriting.write(contentsOf: data)
-                        NSLog("[Auth] Sent Qwen email: %@", email)
                     }
                 }
             }
@@ -463,54 +401,17 @@ class ServerManager: ObservableObject {
                 }
             }
             
-            // Wait briefly to check if process crashes immediately or to capture output
-            let waitTime: TimeInterval = (command == .copilotLogin) ? 2.0 : 1.0
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + waitTime) {
+            // Wait briefly to check if process crashes immediately
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.0) {
                 if authProcess.isRunning {
-                    // Process is still running - check for Copilot device code
                     NSLog("[Auth] Process running after wait, returning success")
-                    
-                    // For Copilot, try to extract the device code from output
-                    if case .copilotLogin = command {
-                        // Extract code from output like "enter the code: XXXX-XXXX"
-                        if let codeRange = capture.text.range(of: "enter the code: "),
-                           let endRange = capture.text[codeRange.upperBound...].range(of: "\n") {
-                            let code = String(capture.text[codeRange.upperBound..<endRange.lowerBound]).trimmingCharacters(in: .whitespaces)
-                            // Copy code to clipboard
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(code, forType: .string)
-                            completion(true, "🌐 Browser opened for GitHub authentication.\n\n📋 Code copied to clipboard:\n\n\(code)\n\nJust paste it in the browser!\n\nThe app will automatically detect when you're authenticated.")
-                            return
-                        } else if capture.text.contains("enter the code:") {
-                            // Try simpler extraction
-                            let lines = capture.text.components(separatedBy: "\n")
-                            for line in lines {
-                                if line.contains("enter the code:") {
-                                    let parts = line.components(separatedBy: "enter the code:")
-                                    if parts.count > 1 {
-                                        let code = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                                        // Copy code to clipboard
-                                        NSPasteboard.general.clearContents()
-                                        NSPasteboard.general.setString(code, forType: .string)
-                                        completion(true, "🌐 Browser opened for GitHub authentication.\n\n📋 Code copied to clipboard:\n\n\(code)\n\nJust paste it in the browser!\n\nThe app will automatically detect when you're authenticated.")
-                                        return
-                                    }
-                                }
-                            }
-                        }
-                        // Fallback if we couldn't extract the code
-                        completion(true, "🌐 Browser opened for GitHub authentication.\n\nCheck your terminal or the opened browser for the device code.\n\nThe app will automatically detect when you're authenticated.")
-                        return
-                    }
-                    
                     completion(true, "🌐 Browser opened for authentication.\n\nPlease complete the login in your browser.\n\nThe app will automatically detect when you're authenticated.")
                 } else {
                     // Process died quickly - check for error
                     let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
                     let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                     
-                    var output = String(data: outputData, encoding: .utf8) ?? ""
-                    if output.isEmpty { output = capture.text }
+                    let output = String(data: outputData, encoding: .utf8) ?? ""
                     let error = String(data: errorData, encoding: .utf8) ?? ""
                     
                     NSLog("[Auth] Process died quickly - output: %@", output.isEmpty ? "(empty)" : String(output.prefix(200)))
@@ -548,107 +449,22 @@ class ServerManager: ObservableObject {
     
     /// Saves a Z.AI API key to the auth directory
     func saveZaiApiKey(_ apiKey: String, completion: @escaping (Bool, String) -> Void) {
-        let authDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
-        
-        // Create auth directory if needed
-        do {
-            try FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
-        } catch {
-            completion(false, "Failed to create auth directory: \(error.localizedDescription)")
-            return
-        }
-        
-        // Generate unique filename with masked key for display
-        let keyPreview = String(apiKey.prefix(8)) + "..." + String(apiKey.suffix(4))
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let filename = "zai-\(UUID().uuidString.prefix(8)).json"
-        let filePath = authDir.appendingPathComponent(filename)
-        
-        // Create auth JSON matching the format used by other providers
-        let authData: [String: Any] = [
-            "type": "zai",
-            "email": keyPreview,
-            "api_key": apiKey,
-            "created": timestamp
-        ]
-        
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: authData, options: .prettyPrinted)
-            try jsonData.write(to: filePath)
-            // Set secure permissions (0600 - owner read/write only)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: filePath.path)
-            addLog("✓ Z.AI API key saved to \(filename)")
-            
-            // Restart server to pick up new config (getConfigPath will merge Z.AI keys)
-            let wasRunning = isRunning
-            if wasRunning {
-                stop { [weak self] in
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        self?.start { _ in }
-                    }
-                }
-            }
-            
-            completion(true, "API key saved successfully")
-        } catch {
-            completion(false, "Failed to save API key: \(error.localizedDescription)")
-        }
+        saveApiKey(apiKey, provider: .zai, completion: completion)
     }
     
     /// Saves a MiniMax API key to the auth directory
     func saveMiniMaxApiKey(_ apiKey: String, completion: @escaping (Bool, String) -> Void) {
-        let authDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
-        
-        // Create auth directory if needed
-        do {
-            try FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
-        } catch {
-            completion(false, "Failed to create auth directory: \(error.localizedDescription)")
-            return
-        }
-        
-        // Generate unique filename with masked key for display
-        let keyPreview = String(apiKey.prefix(8)) + "..." + String(apiKey.suffix(4))
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let filename = "minimax-\(UUID().uuidString.prefix(8)).json"
-        let filePath = authDir.appendingPathComponent(filename)
-        
-        // Create auth JSON matching the format used by other providers
-        let authData: [String: Any] = [
-            "type": "minimax",
-            "email": keyPreview,
-            "api_key": apiKey,
-            "created": timestamp
-        ]
-        
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: authData, options: .prettyPrinted)
-            try jsonData.write(to: filePath)
-            // Set secure permissions (0600 - owner read/write only)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: filePath.path)
-            addLog("✓ MiniMax API key saved to \(filename)")
-            
-            // Restart server to pick up new config (getConfigPath will merge MiniMax keys)
-            let wasRunning = isRunning
-            if wasRunning {
-                stop { [weak self] in
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        self?.start { _ in }
-                    }
-                }
-            }
-            
-            completion(true, "API key saved successfully")
-        } catch {
-            completion(false, "Failed to save API key: \(error.localizedDescription)")
-        }
+        saveApiKey(apiKey, provider: .minimax, completion: completion)
     }
     
     /// Saves a Kimi API key to the auth directory
     func saveKimiApiKey(_ apiKey: String, completion: @escaping (Bool, String) -> Void) {
+        saveApiKey(apiKey, provider: .kimi, completion: completion)
+    }
+
+    private func saveApiKey(_ apiKey: String, provider: ServiceType, completion: @escaping (Bool, String) -> Void) {
         let authDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
 
-        // Create auth directory if needed
         do {
             try FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
         } catch {
@@ -656,15 +472,13 @@ class ServerManager: ObservableObject {
             return
         }
 
-        // Generate unique filename with masked key for display
         let keyPreview = String(apiKey.prefix(8)) + "..." + String(apiKey.suffix(4))
         let timestamp = ISO8601DateFormatter().string(from: Date())
-        let filename = "kimi-\(UUID().uuidString.prefix(8)).json"
+        let filename = "\(provider.rawValue)-\(UUID().uuidString.prefix(8)).json"
         let filePath = authDir.appendingPathComponent(filename)
 
-        // Create auth JSON matching the format used by other providers
         let authData: [String: Any] = [
-            "type": "kimi",
+            "type": provider.rawValue,
             "email": keyPreview,
             "api_key": apiKey,
             "created": timestamp
@@ -673,11 +487,9 @@ class ServerManager: ObservableObject {
         do {
             let jsonData = try JSONSerialization.data(withJSONObject: authData, options: .prettyPrinted)
             try jsonData.write(to: filePath)
-            // Set secure permissions (0600 - owner read/write only)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: filePath.path)
-            addLog("✓ Kimi API key saved to \(filename)")
+            addLog("✓ \(provider.displayName) API key saved to \(filename)")
 
-            // Restart server to pick up new config (getConfigPath will merge Kimi keys)
             let wasRunning = isRunning
             if wasRunning {
                 stop { [weak self] in
@@ -693,7 +505,7 @@ class ServerManager: ObservableObject {
         }
     }
 
-    /// Returns the config path to use, merging bundled config with Z.AI provider and provider exclusions
+    /// Returns the config path to use, merging bundled config with API-key providers and provider exclusions
     func getConfigPath() -> String {
         let bundledConfigPath: String
         if let bundledConfigPathOverride {
@@ -706,41 +518,10 @@ class ServerManager: ObservableObject {
         }
         let authDir = authDirectoryOverride ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
 
-        // Check for Z.AI auth files
-        var zaiApiKeys: [String] = []
-        if let files = try? FileManager.default.contentsOfDirectory(at: authDir, includingPropertiesForKeys: nil) {
-            for file in files where file.lastPathComponent.hasPrefix("zai-") && file.pathExtension == "json" {
-                if let data = try? Data(contentsOf: file),
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let apiKey = json["api_key"] as? String {
-                    zaiApiKeys.append(apiKey)
-                }
-            }
-        }
-
-        // Check for MiniMax auth files
-        var minimaxApiKeys: [String] = []
-        if let files = try? FileManager.default.contentsOfDirectory(at: authDir, includingPropertiesForKeys: nil) {
-            for file in files where file.lastPathComponent.hasPrefix("minimax-") && file.pathExtension == "json" {
-                if let data = try? Data(contentsOf: file),
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let apiKey = json["api_key"] as? String {
-                    minimaxApiKeys.append(apiKey)
-                }
-            }
-        }
-
-        // Check for Kimi auth files
-        var kimiApiKeys: [String] = []
-        if let files = try? FileManager.default.contentsOfDirectory(at: authDir, includingPropertiesForKeys: nil) {
-            for file in files where file.lastPathComponent.hasPrefix("kimi-") && file.pathExtension == "json" {
-                if let data = try? Data(contentsOf: file),
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let apiKey = json["api_key"] as? String {
-                    kimiApiKeys.append(apiKey)
-                }
-            }
-        }
+        // Scan API-key provider auth files using consolidated helper
+        let zaiApiKeys = scanApiKeys(for: ServiceType.zai, in: authDir)
+        let minimaxApiKeys = scanApiKeys(for: ServiceType.minimax, in: authDir)
+        let kimiApiKeys = scanApiKeys(for: ServiceType.kimi, in: authDir)
 
         // Build list of disabled providers
         var disabledProviders: [String] = []
@@ -793,9 +574,9 @@ oauth-excluded-models:
             }
         }
 
-        let hasZai = !zaiApiKeys.isEmpty && isProviderEnabled("zai")
-        let hasMiniMax = !minimaxApiKeys.isEmpty && isProviderEnabled("minimax")
-        let hasKimi = !kimiApiKeys.isEmpty && isProviderEnabled("kimi")
+        let hasZai = !zaiApiKeys.isEmpty && isProviderEnabled(ServiceType.zai.rawValue)
+        let hasMiniMax = !minimaxApiKeys.isEmpty && isProviderEnabled(ServiceType.minimax.rawValue)
+        let hasKimi = !kimiApiKeys.isEmpty && isProviderEnabled(ServiceType.kimi.rawValue)
 
         // Build Claude-compatible upstream section for supported providers
         let claudeCompatibleProviders: [(enabled: Bool, prefix: String, comment: String, baseURL: String, apiKeys: [String], models: [String])] = [
@@ -878,6 +659,20 @@ oauth-excluded-models:
         return logBuffer.elements()
     }
     
+    /// Scans auth directory for API key files matching the given provider prefix.
+    private func scanApiKeys(for provider: ServiceType, in authDir: URL) -> [String] {
+        guard let files = try? FileManager.default.contentsOfDirectory(at: authDir, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        return files.compactMap { file in
+            guard file.lastPathComponent.hasPrefix("\(provider.rawValue)-") && file.pathExtension == "json" else { return nil }
+            guard let data = try? Data(contentsOf: file),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let apiKey = json["api_key"] as? String else { return nil }
+            return apiKey
+        }
+    }
+    
     /// Orphan cleanup is intentionally disabled until it can be scoped to a CCProxy-owned process.
     private func killOrphanedProcesses() {
         // T02 avoids broad process-name matching. T05 will revisit safe stale-process cleanup.
@@ -887,8 +682,4 @@ oauth-excluded-models:
 enum AuthCommand: Equatable {
     case claudeLogin
     case codexLogin
-    case copilotLogin
-    case geminiLogin
-    case qwenLogin(email: String)
-    case antigravityLogin
 }

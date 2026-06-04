@@ -267,8 +267,6 @@ struct SettingsView: View {
     @State private var authResultMessage = ""
     @State private var authResultSuccess = false
     @State private var fileMonitor: DispatchSourceFileSystemObject?
-    @State private var showingQwenEmailPrompt = false
-    @State private var qwenEmail = ""
     @State private var showingZaiApiKeyPrompt = false
     @State private var zaiApiKey = ""
     @State private var showingMiniMaxApiKeyPrompt = false
@@ -353,22 +351,6 @@ struct SettingsView: View {
 
                 Section("Services") {
                     ServiceRow(
-                        serviceType: .antigravity,
-                        iconName: "icon-antigravity.png",
-                        accounts: authManager.accounts(for: .antigravity),
-                        isAuthenticating: authenticatingService == .antigravity,
-                        helpText: "Antigravity provides OAuth-based access to various AI models including Gemini and Claude. One login gives you access to multiple AI services.",
-                        isEnabled: serverManager.isProviderEnabled("antigravity"),
-                        isTemplateIcon: true,
-                        customTitle: nil,
-                        onConnect: { connectService(.antigravity) },
-                        onDisconnect: { account in disconnectAccount(account) },
-                        onToggleDisabled: { account in toggleAccountDisabled(account) },
-                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("antigravity", enabled: enabled) },
-                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
-                    ) { EmptyView() }
-
-                    ServiceRow(
                         serviceType: .claude,
                         iconName: "icon-claude.png",
                         accounts: authManager.accounts(for: .claude),
@@ -399,54 +381,6 @@ struct SettingsView: View {
                         onDisconnect: { account in disconnectAccount(account) },
                         onToggleDisabled: { account in toggleAccountDisabled(account) },
                         onToggleEnabled: { enabled in serverManager.setProviderEnabled("codex", enabled: enabled) },
-                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
-                    ) { EmptyView() }
-
-                    ServiceRow(
-                        serviceType: .gemini,
-                        iconName: "icon-gemini.png",
-                        accounts: authManager.accounts(for: .gemini),
-                        isAuthenticating: authenticatingService == .gemini,
-                        helpText: "⚠️ Note: If you're an existing Gemini user with multiple projects, authentication will use your default project. Set your desired project as default in Google AI Studio before connecting.",
-                        isEnabled: serverManager.isProviderEnabled("gemini"),
-                        isTemplateIcon: true,
-                        customTitle: nil,
-                        onConnect: { connectService(.gemini) },
-                        onDisconnect: { account in disconnectAccount(account) },
-                        onToggleDisabled: { account in toggleAccountDisabled(account) },
-                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("gemini", enabled: enabled) },
-                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
-                    ) { EmptyView() }
-
-                    ServiceRow(
-                        serviceType: .copilot,
-                        iconName: "icon-copilot.png",
-                        accounts: authManager.accounts(for: .copilot),
-                        isAuthenticating: authenticatingService == .copilot,
-                        helpText: "GitHub Copilot provides access to Claude, GPT, Gemini and other models via your Copilot subscription.",
-                        isEnabled: serverManager.isProviderEnabled("github-copilot"),
-                        isTemplateIcon: true,
-                        customTitle: nil,
-                        onConnect: { connectService(.copilot) },
-                        onDisconnect: { account in disconnectAccount(account) },
-                        onToggleDisabled: { account in toggleAccountDisabled(account) },
-                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("github-copilot", enabled: enabled) },
-                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
-                    ) { EmptyView() }
-
-                    ServiceRow(
-                        serviceType: .qwen,
-                        iconName: "icon-qwen.png",
-                        accounts: authManager.accounts(for: .qwen),
-                        isAuthenticating: authenticatingService == .qwen,
-                        helpText: nil,
-                        isEnabled: serverManager.isProviderEnabled("qwen"),
-                        isTemplateIcon: true,
-                        customTitle: nil,
-                        onConnect: { showingQwenEmailPrompt = true },
-                        onDisconnect: { account in disconnectAccount(account) },
-                        onToggleDisabled: { account in toggleAccountDisabled(account) },
-                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("qwen", enabled: enabled) },
                         onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
                     ) { EmptyView() }
 
@@ -513,32 +447,6 @@ struct SettingsView: View {
             .padding(.bottom, 12)
         }
         .frame(width: 480, height: 740)
-        .sheet(isPresented: $showingQwenEmailPrompt) {
-            VStack(spacing: 16) {
-                Text("Qwen Account Email")
-                    .font(.headline)
-                Text("Enter your Qwen account email address")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField("your.email@example.com", text: $qwenEmail)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 250)
-                HStack(spacing: 12) {
-                    Button("Cancel") {
-                        showingQwenEmailPrompt = false
-                        qwenEmail = ""
-                    }
-                    Button("Continue") {
-                        showingQwenEmailPrompt = false
-                        startQwenAuth(email: qwenEmail)
-                    }
-                    .disabled(qwenEmail.isEmpty)
-                    .keyboardShortcut(.defaultAction)
-                }
-            }
-            .padding(24)
-            .frame(width: 350)
-        }
         .sheet(isPresented: $showingZaiApiKeyPrompt) {
             VStack(spacing: 16) {
                 Text("Z.AI API Key")
@@ -682,12 +590,6 @@ struct SettingsView: View {
         switch serviceType {
         case .claude: command = .claudeLogin
         case .codex: command = .codexLogin
-        case .copilot: command = .copilotLogin
-        case .gemini: command = .geminiLogin
-        case .qwen:
-            authenticatingService = nil
-            return // handled separately with email prompt
-        case .antigravity: command = .antigravityLogin
         case .zai:
             authenticatingService = nil
             return // handled separately with API key prompt
@@ -706,12 +608,7 @@ struct SettingsView: View {
                 
                 if success {
                     self.authResultSuccess = true
-                    // For Copilot, use the output which contains the device code
-                    if serviceType == .copilot && (output.contains("Code copied") || output.contains("code:")) {
-                        self.authResultMessage = output
-                    } else {
-                        self.authResultMessage = self.successMessage(for: serviceType)
-                    }
+                    self.authResultMessage = self.successMessage(for: serviceType)
                     self.showingAuthResult = true
                 } else {
                     self.authResultSuccess = false
@@ -728,43 +625,12 @@ struct SettingsView: View {
             return "🌐 Browser opened for Claude Code authentication.\n\nPlease complete the login in your browser.\n\nThe app will automatically detect your credentials."
         case .codex:
             return "🌐 Browser opened for Codex authentication.\n\nPlease complete the login in your browser.\n\nThe app will automatically detect your credentials."
-        case .copilot:
-            return "🌐 GitHub Copilot authentication started!\n\nPlease visit github.com/login/device and enter the code shown.\n\nThe app will automatically detect your credentials."
-        case .gemini:
-            return "🌐 Browser opened for Gemini authentication.\n\nPlease complete the login in your browser.\n\n⚠️ Note: If you have multiple projects, the default project will be used."
-        case .qwen:
-            return "🌐 Browser opened for Qwen authentication.\n\nPlease complete the login in your browser."
-        case .antigravity:
-            return "🌐 Browser opened for Antigravity authentication.\n\nPlease complete the login in your browser."
         case .zai:
             return "✓ Z.AI API key added successfully.\n\nYou can now use GLM models through the proxy."
         case .minimax:
             return "✓ MiniMax API key added successfully.\n\nYou can now use MiniMax models through the proxy."
         case .kimi:
             return "✓ Kimi API key added successfully.\n\nYou can now use Kimi models through the proxy."
-        }
-    }
-    
-    private func startQwenAuth(email: String) {
-        authenticatingService = .qwen
-        NSLog("[SettingsView] Starting Qwen authentication")
-        
-        serverManager.runAuthCommand(.qwenLogin(email: email)) { success, output in
-            NSLog("[SettingsView] Auth completed - success: %d, output: %@", success, output)
-            DispatchQueue.main.async {
-                self.authenticatingService = nil
-                self.qwenEmail = ""
-                
-                if success {
-                    self.authResultSuccess = true
-                    self.authResultMessage = self.successMessage(for: .qwen)
-                    self.showingAuthResult = true
-                } else {
-                    self.authResultSuccess = false
-                    self.authResultMessage = "Authentication failed.\n\nDetails: \(output.isEmpty ? "No output" : output)"
-                    self.showingAuthResult = true
-                }
-            }
         }
     }
     

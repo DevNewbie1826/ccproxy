@@ -34,8 +34,5 @@ quota-exceeded:
   switch-preview-model: true
 
 # OAuth providers for local subscriptions
-# Claude, Codex (GPT), Gemini tokens in ~/.cli-proxy-api/ will be used
+# Claude and Codex tokens in ~/.cli-proxy-api/ will be used
 # No fallback - users must authenticate providers they want to use
-
-# No API keys needed for OAuth-based providers
-generative-language-api-key: []
