@@ -134,6 +134,94 @@ final class ServerManagerConfigTests: XCTestCase {
                           "Disabled 'claude' provider should have wildcard exclusion")
             XCTAssertTrue(contents.contains("  codex:\n    - \"*\""),
                           "Disabled 'codex' provider should have wildcard exclusion")
+
+            // Verify removed provider OAuth keys are absent
+            let removedNeedles = [
+                "ge" + "mi" + "ni-cli",
+                "gi" + "thub-" + "co" + "pilot",
+                "q" + "wen",
+                "anti" + "gravity"
+            ]
+            for needle in removedNeedles {
+                XCTAssertFalse(contents.contains(needle),
+                               "Removed provider key should not appear in generated config")
+            }
+        }
+    }
+
+    /// Verifies oauthProviderKeys contains only Claude and Codex.
+    func testOAuthProviderKeysOnlyContainClaudeAndCodex() {
+        XCTAssertEqual(ServerManager.oauthProviderKeys, ["claude": "claude", "codex": "codex"])
+    }
+
+    /// Verifies the bundled config.yaml does not contain retired entries.
+    func testBundledConfigOmitsRetiredEntries() {
+        let configPath = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Resources/config.yaml")
+            .path
+
+        guard let contents = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+            XCTFail("Bundled config.yaml should be readable")
+            return
+        }
+
+        // Build removed config-key needle from fragments
+        let retiredConfigKey = ["generative", "language", "api", "key"].joined(separator: "-")
+        XCTAssertFalse(contents.contains(retiredConfigKey),
+                       "Bundled config must not contain retired config key")
+
+        let removedNeedles = [
+            "ge" + "mi" + "ni",
+            "co" + "pilot",
+            "q" + "wen",
+            "anti" + "gravity"
+        ]
+        for needle in removedNeedles {
+            XCTAssertFalse(contents.lowercased().contains(needle.lowercased()),
+                           "Bundled config must not contain removed provider name")
+        }
+    }
+
+    /// Verifies active source and test files do not contain removed provider names.
+    func testActiveSourceAndTestsDoNotContainRemovedProviderNames() {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        let directories = ["Sources", "Tests"]
+        let extensions: Set<String> = ["swift", "yaml"]
+
+        var allFiles: [URL] = []
+        for dir in directories {
+            let dirURL = packageRoot.appendingPathComponent(dir)
+            if let enumerator = FileManager.default.enumerator(at: dirURL, includingPropertiesForKeys: nil) {
+                for case let url as URL in enumerator {
+                    if extensions.contains(url.pathExtension) {
+                        allFiles.append(url)
+                    }
+                }
+            }
+        }
+
+        let removedNeedles = [
+            "ge" + "mi" + "ni",
+            "gi" + "thub-" + "co" + "pilot",
+            "co" + "pilot",
+            "q" + "wen",
+            "anti" + "gravity",
+            ["generative", "language", "api", "key"].joined(separator: "-")
+        ]
+
+        for fileURL in allFiles {
+            guard let contents = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
+            for needle in removedNeedles {
+                XCTAssertFalse(contents.lowercased().contains(needle.lowercased()),
+                               "File \(fileURL.lastPathComponent) must not contain removed provider token")
+            }
         }
     }
 

@@ -281,7 +281,7 @@ class ThinkingProxy {
         guard let data = body.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let model = json["model"] as? String else { return false }
-        return model.starts(with: "claude-") || model.starts(with: "gemini-claude-")
+        return model.starts(with: "claude-")
     }
 
     func isRequestAuthorized(headers: [(String, String)]) -> Bool {
@@ -346,110 +346,7 @@ class ThinkingProxy {
      Returns tuple of (modifiedJSON, needsTransformation)
      */
     private func processThinkingParameter(jsonString: String) -> (String, Bool)? {
-        guard let jsonData = jsonString.data(using: .utf8),
-              var json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-              let model = json["model"] as? String else {
-            return nil
-        }
-        
-        // Only process Claude models (including gemini-claude variants)
-        guard model.starts(with: "claude-") || model.starts(with: "gemini-claude-") else {
-            return (jsonString, false)  // Not Claude, pass through
-        }
-        
-        // Check for thinking suffix pattern: -thinking-NUMBER
-        let thinkingPrefix = "-thinking-"
-        if let thinkingRange = model.range(of: thinkingPrefix, options: .backwards),
-           thinkingRange.upperBound < model.endIndex {
-            
-            // Extract the number after "-thinking-"
-            let budgetString = String(model[thinkingRange.upperBound...])
-            
-            // For gemini-claude-* models, preserve "-thinking" and only strip the number
-            // e.g. gemini-claude-opus-4-5-thinking-10000 -> gemini-claude-opus-4-5-thinking
-            // For claude-* models, strip the entire suffix
-            // e.g. claude-opus-4-5-20251101-thinking-10000 -> claude-opus-4-5-20251101
-            let cleanModel: String
-            if model.starts(with: "gemini-claude-") {
-                cleanModel = String(model[..<thinkingRange.upperBound].dropLast(1))  // Keep "-thinking", drop trailing "-"
-            } else {
-                cleanModel = String(model[..<thinkingRange.lowerBound])
-            }
-            json["model"] = cleanModel
-            
-            // Only add thinking parameter if it's a valid integer
-            if let budget = Int(budgetString), budget > 0 {
-                let effectiveBudget = min(budget, Config.hardTokenCap - 1)
-                if effectiveBudget != budget {
-                    NSLog("[ThinkingProxy] Adjusted thinking budget from \(budget) to \(effectiveBudget) to stay within limits")
-                }
-
-                // Claude Opus 4.6+ requires adaptive thinking; older models use enabled+budget_tokens
-                let isAdaptiveModel = cleanModel.contains("opus-4-6") || cleanModel.contains("opus-4-7")
-                if isAdaptiveModel {
-                    json["thinking"] = ["type": "adaptive"]
-                    NSLog("[ThinkingProxy] Using adaptive thinking for model '\(cleanModel)'")
-                } else {
-                    json["thinking"] = [
-                        "type": "enabled",
-                        "budget_tokens": effectiveBudget
-                    ]
-                }
-                
-                // Ensure max token limits are greater than the thinking budget
-                // Claude requires: max_output_tokens (or legacy max_tokens) > thinking.budget_tokens
-                // (only relevant for non-adaptive models, but safe to set for all)
-                let tokenHeadroom = max(Config.minimumHeadroom, Int(Double(effectiveBudget) * Config.headroomRatio))
-                let desiredMaxTokens = effectiveBudget + tokenHeadroom
-                var requiredMaxTokens = min(desiredMaxTokens, Config.hardTokenCap)
-                if requiredMaxTokens <= effectiveBudget {
-                    requiredMaxTokens = min(effectiveBudget + 1, Config.hardTokenCap)
-                }
-                
-                let hasMaxOutputTokensField = json.keys.contains("max_output_tokens")
-                var adjusted = false
-                
-                if let currentMaxTokens = json["max_tokens"] as? Int {
-                    if currentMaxTokens <= effectiveBudget {
-                        json["max_tokens"] = requiredMaxTokens
-                    }
-                    adjusted = true
-                }
-                
-                if let currentMaxOutputTokens = json["max_output_tokens"] as? Int {
-                    if currentMaxOutputTokens <= effectiveBudget {
-                        json["max_output_tokens"] = requiredMaxTokens
-                    }
-                    adjusted = true
-                }
-                
-                if !adjusted {
-                    if hasMaxOutputTokensField {
-                        json["max_output_tokens"] = requiredMaxTokens
-                    } else {
-                        json["max_tokens"] = requiredMaxTokens
-                    }
-                }
-                
-                NSLog("[ThinkingProxy] Transformed model '\(model)' → '\(cleanModel)' with thinking budget \(effectiveBudget)")
-            } else {
-                // Invalid number - just strip suffix and use vanilla model
-                NSLog("[ThinkingProxy] Stripped invalid thinking suffix from '\(model)' → '\(cleanModel)' (no thinking)")
-            }
-            
-            // Convert back to JSON
-            if let modifiedData = try? JSONSerialization.data(withJSONObject: json),
-               let modifiedString = String(data: modifiedData, encoding: .utf8) {
-                return (modifiedString, true)
-            }
-        } else if model.hasSuffix("-thinking") || model.contains("-thinking(") {
-            // Model ends with -thinking or uses -thinking(budget) syntax (e.g. gemini-claude-opus-4-5-thinking, gemini-claude-opus-4-5-thinking(32768))
-            // Enable beta header but don't modify body - let backend handle thinking budget
-            NSLog("[ThinkingProxy] Detected thinking model '\(model)' - enabling beta header, passing through to backend")
-            return (jsonString, true)
-        }
-        
-        return (jsonString, false)  // No transformation needed
+        return processThinkingParameterForTesting(jsonString: jsonString, hardTokenCap: Config.hardTokenCap, minimumHeadroom: Config.minimumHeadroom, headroomRatio: Config.headroomRatio)
     }
     
     /**
@@ -953,6 +850,94 @@ class ThinkingProxy {
         }))
     }
 
+}
+
+// MARK: - Thinking Parameter Processing Seam
+
+/// Internal pure seam for testing thinking parameter processing.
+/// Does not touch networking or instance state.
+internal func processThinkingParameterForTesting(
+    jsonString: String,
+    hardTokenCap: Int = 32000,
+    minimumHeadroom: Int = 1024,
+    headroomRatio: Double = 0.1
+) -> (String, Bool)? {
+    guard let jsonData = jsonString.data(using: .utf8),
+          var json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+          let model = json["model"] as? String else {
+        return nil
+    }
+
+    // Only process Claude models
+    guard model.starts(with: "claude-") else {
+        return (jsonString, false)
+    }
+
+    // Check for thinking suffix pattern: -thinking-NUMBER
+    let thinkingPrefix = "-thinking-"
+    if let thinkingRange = model.range(of: thinkingPrefix, options: .backwards),
+       thinkingRange.upperBound < model.endIndex {
+
+        let budgetString = String(model[thinkingRange.upperBound...])
+
+        let cleanModel = String(model[..<thinkingRange.lowerBound])
+        json["model"] = cleanModel
+
+        if let budget = Int(budgetString), budget > 0 {
+            let effectiveBudget = min(budget, hardTokenCap - 1)
+
+            let isAdaptiveModel = cleanModel.contains("opus-4-6") || cleanModel.contains("opus-4-7")
+            if isAdaptiveModel {
+                json["thinking"] = ["type": "adaptive"]
+            } else {
+                json["thinking"] = [
+                    "type": "enabled",
+                    "budget_tokens": effectiveBudget
+                ]
+            }
+
+            let tokenHeadroom = max(minimumHeadroom, Int(Double(effectiveBudget) * headroomRatio))
+            let desiredMaxTokens = effectiveBudget + tokenHeadroom
+            var requiredMaxTokens = min(desiredMaxTokens, hardTokenCap)
+            if requiredMaxTokens <= effectiveBudget {
+                requiredMaxTokens = min(effectiveBudget + 1, hardTokenCap)
+            }
+
+            let hasMaxOutputTokensField = json.keys.contains("max_output_tokens")
+            var adjusted = false
+
+            if let currentMaxTokens = json["max_tokens"] as? Int {
+                if currentMaxTokens <= effectiveBudget {
+                    json["max_tokens"] = requiredMaxTokens
+                }
+                adjusted = true
+            }
+
+            if let currentMaxOutputTokens = json["max_output_tokens"] as? Int {
+                if currentMaxOutputTokens <= effectiveBudget {
+                    json["max_output_tokens"] = requiredMaxTokens
+                }
+                adjusted = true
+            }
+
+            if !adjusted {
+                if hasMaxOutputTokensField {
+                    json["max_output_tokens"] = requiredMaxTokens
+                } else {
+                    json["max_tokens"] = requiredMaxTokens
+                }
+            }
+        }
+
+        if let modifiedData = try? JSONSerialization.data(withJSONObject: json),
+           let modifiedString = String(data: modifiedData, encoding: .utf8) {
+            return (modifiedString, true)
+        }
+    } else if model.hasSuffix("-thinking") || model.contains("-thinking(") {
+        return (jsonString, true)
+    }
+
+    return (jsonString, false)
 }
 
 // MARK: - Model Alias Canonicalization & Model-List Filtering Helpers
