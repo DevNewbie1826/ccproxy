@@ -17,6 +17,12 @@ BUNDLE_ID="com.devnewbie1826.ccproxy"
 BUILD_DIR="$SRC_DIR/.build/release"
 APP_DIR="$PROJECT_DIR/$APP_NAME.app"
 
+# Generate or validate model catalog snapshot before build
+echo -e "${BLUE}Generating model catalog snapshot...${NC}"
+cd "$PROJECT_DIR"
+swift scripts/generate-model-catalog-snapshot.swift
+echo -e "${GREEN}✅ Model catalog snapshot ready${NC}"
+
 # Build the Swift executable first
 echo -e "${BLUE}Building Swift executable (release)...${NC}"
 cd "$SRC_DIR"

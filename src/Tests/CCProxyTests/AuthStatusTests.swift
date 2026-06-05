@@ -3,16 +3,16 @@ import XCTest
 
 final class AuthStatusTests: XCTestCase {
 
-    /// Verifies ServiceType contains exactly the five kept providers in order.
+    /// Verifies ServiceType contains exactly the six providers in order.
     func testServiceTypeExactRawValues() {
         let rawValues = ServiceType.allCases.map(\.rawValue)
-        XCTAssertEqual(rawValues, ["claude", "codex", "zai", "minimax", "kimi"])
+        XCTAssertEqual(rawValues, ["claude", "codex", "zai", "minimax", "kimi", "opencode-go"])
     }
 
-    /// Verifies ServiceType display names match the five kept providers.
+    /// Verifies ServiceType display names match the six providers.
     func testServiceTypeExactDisplayNames() {
         let names = ServiceType.allCases.map(\.displayName)
-        XCTAssertEqual(names, ["Claude Code", "Codex", "Z.AI GLM", "MiniMax", "Kimi"])
+        XCTAssertEqual(names, ["Claude Code", "Codex", "Z.AI GLM", "MiniMax", "Kimi", "OpenCode Go"])
     }
 
     /// Verifies that removed provider raw values are absent from ServiceType.

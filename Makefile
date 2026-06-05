@@ -1,4 +1,13 @@
-.PHONY: help build release app install run clean test info open edit-config all sparkle-archive backend-version
+.PHONY: help build release app install run clean test info open edit-config all sparkle-archive backend-version model-catalog-snapshot test-snapshot-generator
+
+model-catalog-snapshot: ## Generate or validate model catalog snapshot
+	@echo "📋 Generating model catalog snapshot..."
+	@swift scripts/generate-model-catalog-snapshot.swift
+
+test-snapshot-generator: ## Test snapshot generator script determinism and failure behavior
+	@echo "🧪 Testing snapshot generator script..."
+	@bash scripts/test-snapshot-generator.sh
+	@echo "✅ Snapshot generator tests passed"
 
 help: ## Show this help message
 	@echo "CCProxy - macOS menu bar app"
@@ -6,7 +15,7 @@ help: ## Show this help message
 	@echo "Available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-build: ## Build the Swift executable (debug)
+build: model-catalog-snapshot ## Build the Swift executable (debug)
 	@echo "🔨 Building Swift executable..."
 	@cd src && swift build
 	@echo "✅ Build complete: src/.build/debug/CCProxy"

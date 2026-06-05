@@ -155,10 +155,12 @@ ccproxy/
     │   ├── SettingsView.swift
     │   ├── ThinkingProxy.swift
     │   ├── AuthStatus.swift
+    │   ├── ExternalModelCatalog.swift
     │   ├── TunnelManager.swift
     │   ├── IconCatalog.swift
     │   ├── NotificationNames.swift
     │   └── Resources/
+    │       └── model-catalog-snapshot.json
     └── Tests/
         └── CCProxyTests/
 ```
@@ -170,6 +172,7 @@ ccproxy/
 - `src/Sources/ThinkingProxy.swift` — 로컬 프록시 리스너 및 요청 포워딩
 - `src/Sources/SettingsView.swift` — SwiftUI 설정 화면과 account 관리 UI
 - `src/Sources/AuthStatus.swift` — 로컬 인증/account 상태 추적
+- `src/Sources/ExternalModelCatalog.swift` — 외부 모델 카탈로그 조회, 캐시, provider 매핑
 
 ## 로컬 프록시 인증
 
@@ -220,6 +223,50 @@ curl http://localhost:8317/v1/models
 ```http
 Authorization: Bearer <secret-key>
 ```
+
+## OpenCode Go provider
+
+CCProxy는 **OpenCode Go**를 hosted provider로 포함합니다. 앱 설정에서 API 키로 구성하며, 별도의 Go SDK나 바이너리가 아닙니다.
+
+- 모델 ID는 `/v1/models` 응답에서 `opencode-go/<model-id>` 형식입니다 (예: `opencode-go/glm-5.1`).
+- 내부 생성 config는 접두사가 제거된 슬러그(예: `glm-5.1`)를 사용하며, `prefix: opencode-go`와 `force-model-prefix: true`로 이중 접두사를 방지합니다.
+- 라우팅은 기존 Anthropic 호환 config 경로를 통해 `https://opencode.ai/zen/go/v1/messages`만 사용합니다.
+- `/chat/completions` 및 `openai-compatibility` 라우팅은 이 변경에서 추가되지 않습니다.
+
+## 외부 모델 카탈로그
+
+CCProxy는 런타임에 provider 모델 목록을 제공하기 위해 외부 모델 카탈로그를 유지합니다.
+
+### 카탈로그 소스
+
+- **1차**: CLIProxyAPI `models.json` 및 `codex_client_models.json`
+- **2차**: [models.dev](https://models.dev/api.json)
+
+### 캐시 동작
+
+- 런타임 캐시 경로: `~/.cli-proxy-api/model-catalog-cache.json`
+- 캐시 TTL: **6시간** — 새로고침된 캐시는 최대 6시간 동안 재사용됩니다
+- 실패 시 재시도 제한: **15분** — 새로고침이 실패하면 15분 동안 추가 외부 조회를 시도하지 않습니다
+- 온디맨드 새로고침 전용 — 카탈로그 데이터는 캐시/스냅샷에서 제공되며, TTL이 만료되면 다음 요청이 응답하기 전에 동기적으로 새로고침을 수행합니다 (백그라운드 새로고침이 아님)
+
+### 폴백 순서
+
+1. **유효한 런타임 캐시** (6시간 TTL 이내) — 직접 제공
+2. **만료된 런타임 캐시** — 새로고침 실패 또는 재시도 제한 중인 경우 제공
+3. **번들 스냅샷** — 빌드 시점에 앱 번들에 포함된 스냅샷 (`CCProxy.app/Contents/Resources/model-catalog-snapshot.json`)
+4. **사용 불가** — 유효한 캐시나 스냅샷이 모두 없는 경우에만
+
+유효한 런타임 캐시가 없고 번들 스냅샷만 유효한 경우, 새로고침 실패 시 실패 메타데이터가 기록되며, 15분 재시도 창 내의 반복적인 `/v1/models` 요청은 외부 소스를 다시 조회하지 않고 번들 스냅샷을 제공합니다.
+
+### 연결된 provider 필터링
+
+`/v1/models` 엔드포인트는 **연결된 provider**만 필터링하여 표시합니다.
+
+provider가 연결된 것으로 간주되는 조건:
+- **Claude / Codex**: 활성화되어 있고, 유효하며 비활성화되지 않고 만료되지 않은 OAuth 인증이 있는 경우
+- **Z.AI / MiniMax / Kimi / OpenCode Go**: 활성화되어 있고, 유효하며 비활성화되지 않은 API 키 인증이 있는 경우
+
+비활성화되었거나, 인증이 없거나, OAuth가 만료되었거나, API 키가 비어 있거나 누락된 provider는 `/v1/models` 응답과 생성된 config 모델 목록에서 제외됩니다.
 
 ## 참고 사항
 

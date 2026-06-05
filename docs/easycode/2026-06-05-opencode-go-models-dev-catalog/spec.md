@@ -15,7 +15,7 @@ The user wants two related changes:
 
 OpenCode Go here means the subscription/provider product at `https://opencode.ai/ko/go`, not the Go programming-language SDK. It exposes OpenAI-compatible and Anthropic-compatible API endpoints and uses model IDs in the form `opencode-go/<model-id>` in OpenCode configuration. Current evidence confirms `opencode-go` as a first-class models.dev provider key, distinct from the separate `opencode` / OpenCode Zen provider.
 
-The user has selected unattended completion using the repository's existing release process after implementation and review gates pass. The active target is: create a PR, merge it, update the local base branch, clean up the EasyCode worktree and feature branch, and publish the app release using the repository's existing release procedure.
+The user has selected unattended completion after implementation and review gates pass. The active target is: create a PR, merge it, update the local base branch, and clean up the EasyCode worktree and feature branch.
 
 The repository already contains local proxy behavior and `/v1/models` response transformation logic. It also has static provider/model structures that should be evolved rather than bypassed.
 
@@ -23,10 +23,10 @@ The repository already contains local proxy behavior and `/v1/models` response t
 
 1. Add OpenCode Go as a configurable provider for CCProxy.
    - Treat OpenCode Go as a hosted API/provider, not as a Go-language dependency.
-   - Support routing through CCProxy's local proxy to OpenCode Go's documented compatible endpoints:
-     - `https://opencode.ai/zen/go/v1/chat/completions` for OpenAI-compatible chat completion traffic.
-     - `https://opencode.ai/zen/go/v1/messages` for Anthropic-compatible message traffic when supported by the existing proxy/provider path.
-     - `https://opencode.ai/zen/go/v1/models` for OpenCode Go's minimal OpenAI-compatible model discovery list when useful.
+   - Support routing through CCProxy's local proxy to OpenCode Go's Anthropic-compatible endpoint supported by the existing CCProxy config path:
+     - `https://opencode.ai/zen/go/v1/messages`.
+   - Do not add OpenAI-compatible `openai-compatibility` config emission for `https://opencode.ai/zen/go/v1/chat/completions` in this change.
+   - Treat `https://opencode.ai/zen/go/v1/models` as model-list discovery/reference only when useful; it is not the routing endpoint for this change.
    - Use the standard `Authorization: Bearer <OPENCODE_API_KEY>` request header for direct OpenCode Go API calls.
    - Keep OpenCode Go credentials out of source control and reuse existing project configuration/auth patterns where possible.
    - Follow the existing API-key provider pattern used by hosted providers such as Z.AI, MiniMax, and Kimi unless implementation evidence proves that a different seam is required.
@@ -39,6 +39,9 @@ The repository already contains local proxy behavior and `/v1/models` response t
 
 3. Introduce a cached external model catalog for all connected providers.
    - Use `https://github.com/router-for-me/CLIProxyAPI/tree/main/internal/registry/models` as the primary upstream model catalog source, because it is closest to the bundled backend/proxy model registry lineage.
+   - Treat the exact primary raw inputs as:
+     - `https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/models.json`.
+     - `https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/codex_client_models.json`.
    - Use `https://models.dev/api.json` as the secondary catalog source for connected providers/models that are missing from the CLIProxyAPI registry source, including provider families such as GLM/Z.AI, MiniMax, Kimi/Moonshot, and OpenCode Go when needed.
    - Apply the combined external catalog to existing CCProxy providers, not only to OpenCode Go.
    - Use confirmed provider-key mappings for existing providers where available:
@@ -84,10 +87,11 @@ The repository already contains local proxy behavior and `/v1/models` response t
    - Document how a user configures OpenCode Go credentials for CCProxy.
    - Document that the CLIProxyAPI registry source is primary, models.dev is secondary, a build-time snapshot is bundled, and external catalog data is cached with a six-hour refresh TTL.
 
-7. Release target.
-   - After implementation, verification, and final-review PASS, follow the repository's existing app release process.
-   - Create and merge a PR, update the local base branch, clean up the EasyCode worktree/feature branch, then publish the app release according to repository conventions.
-   - Do not guess release version/build numbers; derive them from the repository's established release process during planning or stop if the process does not provide a safe next version/build.
+7. Unattended finish target.
+   - After implementation, verification, and final-review PASS, create and merge a PR.
+   - Update the local base branch after merge.
+   - Clean up the EasyCode worktree and feature branch after the branch is no longer checked out by the worktree.
+   - Do not publish an app release in this finish target unless the user explicitly re-adds app release publication later.
 
 ## Non-Goals
 
@@ -98,6 +102,7 @@ The repository already contains local proxy behavior and `/v1/models` response t
 - Do not keep hardcoded model catalogs or alias tables as runtime fallback sources.
 - Do not fetch external catalog sources on every model-list request.
 - Do not treat models.dev as the sole catalog source when the CLIProxyAPI registry source has the relevant model/provider data.
+- Do not add full `openai-compatibility` provider architecture or OpenCode Go `/chat/completions` routing in this change.
 - Do not remove small provider-key mapping needed to connect CCProxy provider identifiers to external catalog provider identifiers.
 - Do not implement unrelated UI redesigns beyond what is necessary to configure/represent the provider and model catalog.
 - Do not publish a release before EasyCode final-review PASS and fresh finish verification.
@@ -109,7 +114,7 @@ The repository already contains local proxy behavior and `/v1/models` response t
 - The user wants the CLIProxyAPI registry models used as the first catalog source, with models.dev used to fill missing providers/models.
 - The user wants catalog data cached locally by the project/app and refreshed roughly every six hours instead of fetched per request.
 - The user wants a build-time latest external catalog snapshot bundled into the app so missing runtime cache does not immediately fail.
-- The user selected unattended completion through PR creation, PR merge, local base update, EasyCode worktree/branch cleanup, and app release using the repository's existing release process.
+- The user selected unattended completion through PR creation, PR merge, local base update, and EasyCode worktree/branch cleanup.
 
 ## Success Criteria
 
@@ -120,11 +125,12 @@ The repository already contains local proxy behavior and `/v1/models` response t
 - Model-list behavior handles external catalog fetch/parse failure without hardcoded catalog fallback, using valid external-source-derived runtime cache or bundled build-time snapshot when available.
 - Tests cover OpenCode Go provider behavior, combined catalog filtering, unavailable/malformed catalog behavior, six-hour cache TTL behavior, bundled snapshot fallback, no-hardcoded-catalog behavior, and model-list response-shape compatibility.
 - Documentation explains setup and expected behavior.
-- The existing repository release process is followed after final-review PASS, including PR/merge/local-update/cleanup/release verification.
+- The unattended finish target is completed after final-review PASS, including PR creation, PR merge, local base update, and EasyCode worktree/branch cleanup.
 
 ## Risks And Open Questions
 
 - Public OpenCode Go docs do not spell out the auth header in the same place as the endpoint list, but official OpenCode source indicates Bearer-token parsing from the `Authorization` header; implementation should still verify behavior with a configured key.
+- CCProxy's current config generator supports `claude-api-key` Anthropic-compatible provider blocks but does not emit `openai-compatibility` blocks. Therefore this change supports OpenCode Go's Anthropic-compatible `/zen/go/v1/messages` endpoint only.
 - models.dev model IDs follow AI SDK/provider registry conventions and may not always match every provider's raw API IDs; provider-id and model-id mapping/normalization is required for providers whose CCProxy naming differs from models.dev.
 - models.dev provider-key research did not confirm `minimax` as a top-level provider key.
 - Follow-up models.dev provider-key research confirmed `opencode-go` as the OpenCode Go provider key, distinct from `opencode` / OpenCode Zen.

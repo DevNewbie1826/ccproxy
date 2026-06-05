@@ -154,10 +154,12 @@ ccproxy/
     │   ├── SettingsView.swift
     │   ├── ThinkingProxy.swift
     │   ├── AuthStatus.swift
+    │   ├── ExternalModelCatalog.swift
     │   ├── TunnelManager.swift
     │   ├── IconCatalog.swift
     │   ├── NotificationNames.swift
     │   └── Resources/
+    │       └── model-catalog-snapshot.json
     └── Tests/
         └── CCProxyTests/
 ```
@@ -169,6 +171,7 @@ ccproxy/
 - `src/Sources/ThinkingProxy.swift` — local proxy listener and request forwarding
 - `src/Sources/SettingsView.swift` — SwiftUI settings and account management UI
 - `src/Sources/AuthStatus.swift` — local auth/account state tracking
+- `src/Sources/ExternalModelCatalog.swift` — external model catalog fetching, caching, and provider mapping
 
 ## Local proxy authentication
 
@@ -219,6 +222,50 @@ Local proxy requests are expected to provide:
 ```http
 Authorization: Bearer <secret-key>
 ```
+
+## OpenCode Go provider
+
+CCProxy includes **OpenCode Go** as a hosted provider. It is configured with an API key in the app's settings — not a Go SDK or separate binary.
+
+- Model IDs follow the pattern `opencode-go/<model-id>` in `/v1/models` responses (e.g. `opencode-go/glm-5.1`).
+- Internal generated config uses unprefixed model slugs (e.g. `glm-5.1`) with `prefix: opencode-go` and `force-model-prefix: true` to avoid double-prefixing.
+- Routing uses `https://opencode.ai/zen/go/v1/messages` through the existing Anthropic-compatible config path only.
+- `/chat/completions` and `openai-compatibility` routing are not added in this change.
+
+## External model catalog
+
+CCProxy maintains an external model catalog that drives provider model lists at runtime.
+
+### Catalog sources
+
+- **Primary**: CLIProxyAPI `models.json` and `codex_client_models.json`
+- **Secondary**: [models.dev](https://models.dev/api.json)
+
+### Cache behavior
+
+- Runtime cache path: `~/.cli-proxy-api/model-catalog-cache.json`
+- Cache TTL: **6 hours** — a fresh cache is reused for up to 6 hours before an on-demand synchronous refresh is attempted
+- Failed-refresh retry throttle: **15 minutes** — if a refresh fails, no further external fetch attempts are made for 15 minutes
+- On-demand refresh only — catalog data is served from cache/snapshot; when the TTL expires, the next request triggers a synchronous refresh before responding (not a background refresh)
+
+### Fallback order
+
+1. **Fresh runtime cache** (within 6-hour TTL) — served directly
+2. **Stale runtime cache** — served if a refresh attempt fails or the retry throttle is active
+3. **Bundled snapshot** — a build-time snapshot (`model-catalog-snapshot.json`) baked into the app bundle at `CCProxy.app/Contents/Resources/model-catalog-snapshot.json`
+4. **Unavailable** — only if no valid cache or snapshot exists
+
+When no valid runtime cache exists but the bundled snapshot is valid, a failed refresh records failure metadata and repeated `/v1/models` requests inside the 15-minute retry window serve the bundled snapshot without re-fetching external sources.
+
+### Connected provider filtering
+
+The `/v1/models` endpoint is filtered to **connected providers only**.
+
+A provider is considered connected when:
+- **Claude / Codex**: enabled with valid, non-disabled, non-expired OAuth auth
+- **Z.AI / MiniMax / Kimi / OpenCode Go**: enabled with valid, non-disabled API-key credentials
+
+Providers that are disabled, have no auth, have expired OAuth, or have empty/missing API keys are excluded from `/v1/models` responses and from generated config model lists.
 
 ## Notes
 

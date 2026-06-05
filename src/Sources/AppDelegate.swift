@@ -32,6 +32,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNoti
         serverManager = ServerManager()
         thinkingProxy = ThinkingProxy()
 
+        // Wire catalog provider: AppDelegate-owned serverManager controls
+        // connected-provider state for /v1/models catalog filtering.
+        // No singleton or separate ServerManager construction is used.
+        thinkingProxy.configureCatalogProvider(serverManager)
+
         // Sync Vercel AI Gateway config from ServerManager to ThinkingProxy
         syncVercelConfig()
         serverManager.onVercelConfigChanged = { [weak self] in

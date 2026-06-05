@@ -22,6 +22,27 @@ struct VercelGatewayConfig {
     var isActive: Bool { enabled && !apiKey.isEmpty }
 }
 
+/// Protocol for providing catalog-backed model data for /v1/models responses.
+/// Implementations coordinate between the external catalog cache coordinator
+/// and the connected-provider set from ServerManager.
+protocol ModelListCatalogProvider {
+    /// Returns catalog models for currently connected providers, or .unavailable
+    /// when no valid catalog cache/snapshot exists.
+    /// - `.available([model])` = catalog data present, filtered by connected providers.
+    ///   An empty array means no connected providers — distinct from unavailable.
+    /// - `.unavailable` = no valid catalog; caller returns an explicit empty model list
+    ///   to prevent backend model leakage (not a backend pass-through).
+    func fetchCatalogModels() -> CatalogModelsResult
+}
+
+/// Stub provider used before AppDelegate wires the real catalog provider.
+/// Returns `.unavailable` to prevent partial catalog responses before wiring.
+struct StubModelListCatalogProvider: ModelListCatalogProvider {
+    func fetchCatalogModels() -> CatalogModelsResult {
+        return .unavailable
+    }
+}
+
 class ThinkingProxy {
     private var listener: NWListener?
     let proxyPort: UInt16 = 8317
@@ -31,6 +52,46 @@ class ThinkingProxy {
     private let stateQueue = DispatchQueue(label: "com.devnewbie1826.ccproxy.thinking-proxy-state")
 
     var vercelConfig = VercelGatewayConfig(enabled: false, apiKey: "")
+
+    /// Catalog model-list provider for /v1/models response generation.
+    /// Initialized with a production provider that reads from the external catalog
+    /// cache and connected-provider state. Injectable for testing.
+    /// Set by AppDelegate after ThinkingProxy initialization using configureCatalogProvider(_:).
+    var catalogProvider: ModelListCatalogProvider = StubModelListCatalogProvider()
+
+    /// Configures the catalog provider using the AppDelegate-owned ServerManager.
+    /// Must be called once after ThinkingProxy initialization, before any /v1/models
+    /// requests arrive. The connected-provider set is derived from the injected manager.
+    func configureCatalogProvider(_ serverManager: ServerManager) {
+        catalogProvider = ProductionModelListCatalogProvider.createDefault(
+            connectedProvidersProvider: { [weak serverManager] in
+                guard let manager = serverManager else { return Set<String>() }
+                return Set(manager.connectedProviders().map { $0.rawValue })
+            }
+        )
+    }
+
+    /// Test-friendly overload that wires the same production path but accepts
+    /// injected dependencies (fetcher, cache directory, snapshot URL, clock)
+    /// to avoid live network access in tests.
+    func configureCatalogProvider(
+        _ serverManager: ServerManager,
+        fetcher: CatalogFetcher,
+        cacheDirectory: URL,
+        bundledSnapshotURL: URL?,
+        clock: CatalogClock
+    ) {
+        catalogProvider = ProductionModelListCatalogProvider.createDefault(
+            connectedProvidersProvider: { [weak serverManager] in
+                guard let manager = serverManager else { return Set<String>() }
+                return Set(manager.connectedProviders().map { $0.rawValue })
+            },
+            fetcher: fetcher,
+            cacheDirectory: cacheDirectory,
+            bundledSnapshotURL: bundledSnapshotURL,
+            clock: clock
+        )
+    }
 
     private var localProxySecret: String {
         UserDefaults.standard.string(forKey: "managementSecretKey") ?? ""
@@ -517,8 +578,7 @@ class ThinkingProxy {
      3. `unsafeForTransformation` → send buffered bytes to client, then continue
         streaming remaining backend chunks via `streamNextChunk`.
      4. `bodyIncomplete` → keep buffering until body bytes reach Content-Length.
-     5. `bodyExact` → attempt transformation via `transformModelListHTTPResponseIfEligible`;
-        send transformed or original data, then close.
+     5. `bodyExact` → attempt catalog-backed transformation; send transformed or original data, then close.
      6. `bodyOverflow` → send buffered bytes to client, then continue streaming.
 
      If the backend connection closes (isComplete) before reaching `bodyExact`,
@@ -603,12 +663,26 @@ class ThinkingProxy {
                 }
 
             case .bodyExact:
-                // Deterministic boundary reached — attempt transformation
-                let transformed = transformModelListHTTPResponseIfEligible(
-                    method: method,
-                    path: path,
-                    responseData: newData
-                )
+                // Deterministic boundary reached — attempt catalog-backed transformation
+                let transformed: Data?
+                let catalogResult = self.catalogProvider.fetchCatalogModels()
+                switch catalogResult {
+                case .available(let catalogModels):
+                    transformed = transformModelListHTTPResponseWithCatalog(
+                        method: method,
+                        path: path,
+                        responseData: newData,
+                        catalogModels: catalogModels
+                    )
+                case .unavailable:
+                    // Catalog unavailable: produce explicit empty list to prevent
+                    // backend model leakage (not a backend pass-through).
+                    transformed = transformModelListHTTPResponseWhenCatalogUnavailable(
+                        method: method,
+                        path: path,
+                        responseData: newData
+                    )
+                }
                 let dataToSend = transformed ?? newData
 
                 if transformed != nil {
@@ -1051,83 +1125,6 @@ internal func canonicalizeTopLevelModelAlias(in jsonString: String) -> String? {
     return modifiedString
 }
 
-/// Filters a model-list response body by removing alias entries whose canonical
-/// partner is also present, and normalizes `owned_by` for retained entries with
-/// deterministic provider prefixes.
-///
-/// - Parameter bodyData: Raw JSON data of an OpenAI-compatible model-list response.
-/// - Returns: Serialized filtered JSON data when transformation succeeds safely,
-///   or `nil` for malformed JSON, unexpected shape, or entries without string `id`.
-internal func filterModelListResponseBody(_ bodyData: Data) -> Data? {
-    guard let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
-          let dataArray = json["data"] as? [[String: Any]] else {
-        return nil
-    }
-
-    // Every entry must have a string `id`; fail-safe if any does not.
-    for entry in dataArray {
-        guard entry["id"] is String else {
-            return nil
-        }
-    }
-
-    // Build set of IDs present in the response
-    let presentIDs = Set(dataArray.compactMap { $0["id"] as? String })
-
-    // Build reverse map: canonical ID -> alias IDs
-    var canonicalToAliases: [String: [String]] = [:]
-    for (alias, canonical) in modelAliasToCanonical {
-        canonicalToAliases[canonical, default: []].append(alias)
-    }
-
-    // Set of alias IDs to remove (only when canonical is present)
-    var aliasesToRemove: Set<String> = []
-    for (canonical, aliases) in canonicalToAliases {
-        if presentIDs.contains(canonical) {
-            for alias in aliases {
-                aliasesToRemove.insert(alias)
-            }
-        }
-    }
-
-    // Filter entries and normalize ownership
-    var filteredEntries: [[String: Any]] = []
-    for var entry in dataArray {
-        guard let id = entry["id"] as? String else { continue }
-
-        // Skip alias entries whose canonical partner is present
-        if aliasesToRemove.contains(id) {
-            continue
-        }
-
-        // Normalize owned_by for retained entries
-        normalizeOwnedBy(for: &entry, id: id)
-        filteredEntries.append(entry)
-    }
-
-    // Rebuild the response object preserving unrelated top-level fields
-    var result = json
-    result["data"] = filteredEntries
-
-    guard let resultData = try? JSONSerialization.data(withJSONObject: result) else {
-        return nil
-    }
-
-    return resultData
-}
-
-/// Normalizes the `owned_by` field for model entries with deterministic provider prefixes.
-private func normalizeOwnedBy(for entry: inout [String: Any], id: String) {
-    if id.hasPrefix("zai/") {
-        entry["owned_by"] = "zai"
-    } else if id.hasPrefix("minimax/") {
-        entry["owned_by"] = "minimax"
-    } else if id.hasPrefix("gpt-") || id.hasPrefix("codex-") {
-        entry["owned_by"] = "openai"
-    }
-    // Other entries keep their original owned_by
-}
-
 /// Determines whether an HTTP request is an eligible `GET /v1/models` request.
 ///
 /// Strips any query string from the path before matching. Returns `true` only when
@@ -1166,7 +1163,7 @@ internal enum ModelListBufferClassification: Equatable {
     /// less than Content-Length. Keep buffering.
     case bodyIncomplete
     /// Buffered body bytes exactly match Content-Length. Safe to attempt
-    /// transformation via `transformModelListHTTPResponseIfEligible`.
+    /// transformation via the seam.
     case bodyExact
     /// Buffered body bytes exceed Content-Length. Unsafe framing.
     /// Production should send already-buffered bytes and continue streaming.
@@ -1253,40 +1250,47 @@ internal func classifyBufferedModelListResponse(_ data: Data) -> ModelListBuffer
     }
 }
 
-/// Transforms a complete buffered HTTP response for eligible `GET /v1/models` requests.
+/// Case-insensitive header lookup from a list of (name, value) tuples.
+private func headerValueCI(headers: [(String, String)], name: String) -> String? {
+    return headers.first { $0.0.caseInsensitiveCompare(name) == .orderedSame }?.1
+}
+
+/// Transforms a complete buffered HTTP response for eligible `GET /v1/models` requests,
+/// replacing the backend model-list body with catalog-backed connected-provider output.
 ///
-/// This is the internal pure helper seam called by the production buffered response path
-/// for model-list responses. Tests exercise this same function without sockets.
+/// This is the Task 3 pure helper seam for catalog-backed model-list transformation.
+/// Unlike the removed legacy alias-filtering function, this function replaces the
+/// body entirely with catalog-rendered output.
+/// the backend body, this function replaces the body entirely with catalog-rendered output.
 ///
-/// **Eligibility:** method must be `"GET"` and URL path component must be exactly `"/v1/models"`
-/// (query string ignored). Ineligible method/path returns `nil`.
+/// **Eligibility:** Same rules as the model-list classification seam:
+/// method must be `"GET"` and URL path component must be exactly `"/v1/models"`.
 ///
 /// **Safety checks** (all must pass or `nil` is returned for pass-through):
-/// - Response must contain a valid `\r\n\r\n` header/body separator.
+/// - Valid `\r\n\r\n` header/body separator.
 /// - Status must be 2xx.
-/// - No `Content-Encoding` header present.
-/// - No `Transfer-Encoding: chunked` header present.
-/// - A valid numeric `Content-Length` must exist and **exactly** match the body byte count.
+/// - No `Content-Encoding` header.
+/// - No `Transfer-Encoding: chunked` header.
+/// - Valid numeric `Content-Length` exactly matching body byte count.
 ///
 /// **Transformation:**
-/// - Applies `filterModelListResponseBody` to the body bytes.
-/// - If the filter returns `nil`, this function also returns `nil` (pass-through).
-/// - Rebuilds the HTTP response preserving the original status line and safe headers.
+/// - Renders catalog models using `ExternalModelCatalog.renderModelList`.
+/// - Rebuilds the HTTP response preserving original status line and safe headers.
 /// - Removes stale `Content-Length` and `Transfer-Encoding`.
-/// - Sets `Content-Length` to the transformed body byte count.
+/// - Sets `Content-Length` to the catalog-rendered body byte count.
 /// - Ensures exactly one `Connection: close` header.
-/// - Appends the transformed body bytes.
 ///
 /// - Parameters:
 ///   - method: The HTTP method of the original request.
 ///   - path: The URL path of the original request (may include query string).
 ///   - responseData: The complete buffered HTTP response bytes from the backend.
-/// - Returns: Rebuilt HTTP response `Data`, or `nil` if the response should be
-///   passed through unchanged.
-internal func transformModelListHTTPResponseIfEligible(
+///   - catalogModels: Pre-filtered catalog models for connected providers only.
+/// - Returns: Rebuilt HTTP response `Data`, or `nil` for pass-through.
+internal func transformModelListHTTPResponseWithCatalog(
     method: String,
     path: String,
-    responseData: Data
+    responseData: Data,
+    catalogModels: [CatalogModel]
 ) -> Data? {
     // 1. Eligibility check
     guard isModelListRequest(method: method, path: path) else {
@@ -1312,7 +1316,6 @@ internal func transformModelListHTTPResponseIfEligible(
         return nil
     }
 
-    // Extract status code from status line: "HTTP/1.1 200 OK"
     let statusParts = statusLine.components(separatedBy: " ")
     guard statusParts.count >= 2,
           let statusCode = Int(statusParts[1]),
@@ -1330,18 +1333,15 @@ internal func transformModelListHTTPResponseIfEligible(
     }
 
     // 6. Safety checks on headers
-    //    - No Content-Encoding
     if headerValueCI(headers: headers, name: "Content-Encoding") != nil {
         return nil
     }
 
-    //    - No Transfer-Encoding: chunked
     if let teValue = headerValueCI(headers: headers, name: "Transfer-Encoding"),
        teValue.lowercased() == "chunked" {
         return nil
     }
 
-    //    - Valid Content-Length must exist and exactly match body bytes
     guard let clStr = headerValueCI(headers: headers, name: "Content-Length"),
           let contentLength = Int(clStr),
           contentLength >= 0,
@@ -1349,12 +1349,10 @@ internal func transformModelListHTTPResponseIfEligible(
         return nil
     }
 
-    // 7. Attempt model-list body transformation
-    guard let transformedBodyData = filterModelListResponseBody(bodyBytes) else {
-        return nil
-    }
+    // 7. Render catalog-backed model list (replaces backend body entirely)
+    let catalogBodyData = ExternalModelCatalog.renderModelList(models: catalogModels)
 
-    guard let transformedBodyString = String(data: transformedBodyData, encoding: .utf8) else {
+    guard let catalogBodyString = String(data: catalogBodyData, encoding: .utf8) else {
         return nil
     }
 
@@ -1370,21 +1368,16 @@ internal func transformModelListHTTPResponseIfEligible(
         }
         rebuilt += "\(name): \(value)\r\n"
     }
-    rebuilt += "Content-Length: \(transformedBodyData.count)\r\n"
+    rebuilt += "Content-Length: \(catalogBodyData.count)\r\n"
     rebuilt += "Connection: close\r\n"
     rebuilt += "\r\n"
-    rebuilt += transformedBodyString
+    rebuilt += catalogBodyString
 
     guard let resultData = rebuilt.data(using: .utf8) else {
         return nil
     }
 
     return resultData
-}
-
-/// Case-insensitive header lookup from a list of (name, value) tuples.
-private func headerValueCI(headers: [(String, String)], name: String) -> String? {
-    return headers.first { $0.0.caseInsensitiveCompare(name) == .orderedSame }?.1
 }
 
 /// Finds the byte offset immediately after the first `\r\n\r\n` sequence in `data`.
@@ -1404,4 +1397,34 @@ internal func findHeaderBodySeparatorByteOffset(in data: Data) -> Int? {
         }
     }
     return nil
+}
+
+/// Handles the catalog-unavailable case for model-list responses.
+/// When the catalog is unavailable (no valid cache/snapshot), this produces an
+/// explicit empty OpenAI-style model list instead of passing through the backend response,
+/// preventing leakage of unrelated backend model entries.
+///
+/// Returns `nil` for non-2xx, unsafe, or malformed responses (same safety checks as
+/// the catalog-available path).
+///
+/// - Parameters:
+///   - method: HTTP method of the request.
+///   - path: URL path of the request.
+///   - responseData: The full raw HTTP response from the backend.
+/// - Returns: A transformed response with an empty model list, or nil if the response
+///   is unsafe to transform.
+internal func transformModelListHTTPResponseWhenCatalogUnavailable(
+    method: String,
+    path: String,
+    responseData: Data
+) -> Data? {
+    // Reuse the catalog-available path with empty models, which is the
+    // correct behavior when catalog is unavailable: return empty list,
+    // not backend pass-through.
+    return transformModelListHTTPResponseWithCatalog(
+        method: method,
+        path: path,
+        responseData: responseData,
+        catalogModels: []
+    )
 }
