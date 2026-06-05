@@ -273,6 +273,8 @@ struct SettingsView: View {
     @State private var miniMaxApiKey = ""
     @State private var showingKimiApiKeyPrompt = false
     @State private var kimiApiKey = ""
+    @State private var showingOpenCodeGoApiKeyPrompt = false
+    @State private var openCodeGoApiKey = ""
     @State private var pendingRefresh: DispatchWorkItem?
     @State private var expandedRowCount = 0
     @State private var secretKeyDraft = ""
@@ -431,6 +433,22 @@ struct SettingsView: View {
                         onToggleEnabled: { enabled in serverManager.setProviderEnabled("kimi", enabled: enabled) },
                         onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
                     ) { EmptyView() }
+
+                    ServiceRow(
+                        serviceType: .opencodeGo,
+                        iconName: "",
+                        accounts: authManager.accounts(for: .opencodeGo),
+                        isAuthenticating: authenticatingService == .opencodeGo,
+                        helpText: "OpenCode Go provides low-cost coding models via subscription. Get your key at https://opencode.ai/ko/go",
+                        isEnabled: serverManager.isProviderEnabled("opencode-go"),
+                        isTemplateIcon: false,
+                        customTitle: nil,
+                        onConnect: { showingOpenCodeGoApiKeyPrompt = true },
+                        onDisconnect: { account in disconnectAccount(account) },
+                        onToggleDisabled: { account in toggleAccountDisabled(account) },
+                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("opencode-go", enabled: enabled) },
+                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
+                    ) { EmptyView() }
                 }
             }
             .formStyle(.grouped)
@@ -525,6 +543,32 @@ struct SettingsView: View {
             .padding(24)
             .frame(width: 400)
         }
+        .sheet(isPresented: $showingOpenCodeGoApiKeyPrompt) {
+            VStack(spacing: 16) {
+                Text("OpenCode Go API Key")
+                    .font(.headline)
+                Text("Enter your OpenCode Go API key from https://opencode.ai/ko/go")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                SecureField("", text: $openCodeGoApiKey)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 300)
+                HStack(spacing: 12) {
+                    Button("Cancel") {
+                        showingOpenCodeGoApiKeyPrompt = false
+                        openCodeGoApiKey = ""
+                    }
+                    Button("Add Key") {
+                        showingOpenCodeGoApiKeyPrompt = false
+                        startOpenCodeGoAuth(apiKey: openCodeGoApiKey)
+                    }
+                    .disabled(openCodeGoApiKey.isEmpty)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(24)
+            .frame(width: 400)
+        }
         .onAppear {
             secretKeyDraft = serverManager.managementSecretKey
             authManager.checkAuthStatus()
@@ -599,6 +643,9 @@ struct SettingsView: View {
         case .kimi:
             authenticatingService = nil
             return // handled separately with API key prompt
+        case .opencodeGo:
+            authenticatingService = nil
+            return // handled separately with API key prompt
         }
         
         serverManager.runAuthCommand(command) { success, output in
@@ -631,6 +678,8 @@ struct SettingsView: View {
             return "✓ MiniMax API key added successfully.\n\nYou can now use MiniMax models through the proxy."
         case .kimi:
             return "✓ Kimi API key added successfully.\n\nYou can now use Kimi models through the proxy."
+        case .opencodeGo:
+            return "✓ OpenCode Go API key added successfully.\n\nYou can now use OpenCode Go models through the proxy."
         }
     }
     
@@ -695,6 +744,30 @@ struct SettingsView: View {
                 if success {
                     self.authResultSuccess = true
                     self.authResultMessage = self.successMessage(for: .kimi)
+                    self.showingAuthResult = true
+                    self.authManager.checkAuthStatus()
+                } else {
+                    self.authResultSuccess = false
+                    self.authResultMessage = "Failed to save API key.\n\nDetails: \(output.isEmpty ? "Unknown error" : output)"
+                    self.showingAuthResult = true
+                }
+            }
+        }
+    }
+
+    private func startOpenCodeGoAuth(apiKey: String) {
+        authenticatingService = .opencodeGo
+        NSLog("[SettingsView] Adding OpenCode Go API key")
+
+        serverManager.saveOpenCodeGoApiKey(apiKey) { success, output in
+            NSLog("[SettingsView] OpenCode Go key save completed - success: %d, output: %@", success, output)
+            DispatchQueue.main.async {
+                self.authenticatingService = nil
+                self.openCodeGoApiKey = ""
+
+                if success {
+                    self.authResultSuccess = true
+                    self.authResultMessage = self.successMessage(for: .opencodeGo)
                     self.showingAuthResult = true
                     self.authManager.checkAuthStatus()
                 } else {

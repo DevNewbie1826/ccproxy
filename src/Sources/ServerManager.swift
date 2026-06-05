@@ -68,6 +68,49 @@ class ServerManager: ObservableObject {
     /// Test seam: override the auth directory used by getConfigPath()
     var authDirectoryOverride: URL?
 
+    /// Test seam: override model names for specific provider prefixes in generated config.
+    /// Model names may be provider-qualified (e.g. "opencode-go/kimi-k2.6"); the config
+    /// generator strips the provider prefix for providers using prefix + force-model-prefix.
+    /// When nil, model names are derived from the bundled catalog snapshot.
+    var catalogModelsOverride: [String: [String]]?
+
+    /// Returns model names for the given provider prefix from catalog data:
+    /// 1. catalogModelsOverride if set for that prefix (test seam)
+    /// 2. Model names loaded from runtime cache file first, then bundled snapshot
+    /// 3. Empty array if neither is available
+    /// Reads from disk on each call to observe runtime cache updates.
+    private func catalogModelsForPrefix(_ prefix: String) -> [String] {
+        if let override = catalogModelsOverride?[prefix] {
+            return override
+        }
+        return loadCatalogModelNames()[prefix] ?? []
+    }
+
+    /// Loads model names for config generation using the same data sources as /v1/models:
+    /// 1. Runtime cache file (same file CacheCoordinator writes to)
+    /// 2. Bundled catalog snapshot
+    /// This alignment ensures config and /v1/models do not diverge when a runtime cache exists.
+    /// Config generation never triggers a network fetch; it reads whatever is on disk.
+    private func loadCatalogModelNames() -> [String: [String]] {
+        let authDir = authDirectoryOverride ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
+
+        // 1. Try the runtime cache file (same file CacheCoordinator writes to)
+        let runtimeCacheFile = authDir.appendingPathComponent("model-catalog-cache.json")
+        if let data = try? Data(contentsOf: runtimeCacheFile),
+           let snapshot = try? JSONDecoder().decode(CatalogSnapshot.self, from: data),
+           ExternalModelCatalog.isValidSnapshot(snapshot) {
+            return ExternalModelCatalog.extractConfigModelNames(from: snapshot)
+        }
+
+        // 2. Fall back to bundled snapshot
+        guard let url = ProductionModelListCatalogProvider.resolveBundledSnapshotURL(),
+              let data = try? Data(contentsOf: url),
+              let snapshot = try? JSONDecoder().decode(CatalogSnapshot.self, from: data) else {
+            return [:]
+        }
+        return ExternalModelCatalog.extractConfigModelNames(from: snapshot)
+    }
+
     /// Provider enabled states - when disabled, models are excluded via oauth-excluded-models
     @Published var enabledProviders: [String: Bool] = [:] {
         didSet {
@@ -462,8 +505,13 @@ class ServerManager: ObservableObject {
         saveApiKey(apiKey, provider: .kimi, completion: completion)
     }
 
+    /// Saves an OpenCode Go API key to the auth directory
+    func saveOpenCodeGoApiKey(_ apiKey: String, completion: @escaping (Bool, String) -> Void) {
+        saveApiKey(apiKey, provider: .opencodeGo, completion: completion)
+    }
+
     private func saveApiKey(_ apiKey: String, provider: ServiceType, completion: @escaping (Bool, String) -> Void) {
-        let authDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
+        let authDir = authDirectoryOverride ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
 
         do {
             try FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
@@ -522,6 +570,7 @@ class ServerManager: ObservableObject {
         let zaiApiKeys = scanApiKeys(for: ServiceType.zai, in: authDir)
         let minimaxApiKeys = scanApiKeys(for: ServiceType.minimax, in: authDir)
         let kimiApiKeys = scanApiKeys(for: ServiceType.kimi, in: authDir)
+        let openCodeGoApiKeys = scanApiKeys(for: ServiceType.opencodeGo, in: authDir)
 
         // Build list of disabled providers
         var disabledProviders: [String] = []
@@ -532,7 +581,7 @@ class ServerManager: ObservableObject {
         }
 
         // If no provider keys, no disabled providers, and no secret key, use bundled config
-        guard !zaiApiKeys.isEmpty || !minimaxApiKeys.isEmpty || !kimiApiKeys.isEmpty || !disabledProviders.isEmpty || !managementSecretKey.isEmpty else {
+        guard !zaiApiKeys.isEmpty || !minimaxApiKeys.isEmpty || !kimiApiKeys.isEmpty || !openCodeGoApiKeys.isEmpty || !disabledProviders.isEmpty || !managementSecretKey.isEmpty else {
             return bundledConfigPath
         }
 
@@ -577,6 +626,7 @@ oauth-excluded-models:
         let hasZai = !zaiApiKeys.isEmpty && isProviderEnabled(ServiceType.zai.rawValue)
         let hasMiniMax = !minimaxApiKeys.isEmpty && isProviderEnabled(ServiceType.minimax.rawValue)
         let hasKimi = !kimiApiKeys.isEmpty && isProviderEnabled(ServiceType.kimi.rawValue)
+        let hasOpenCodeGo = !openCodeGoApiKeys.isEmpty && isProviderEnabled(ServiceType.opencodeGo.rawValue)
 
         // Build Claude-compatible upstream section for supported providers
         let claudeCompatibleProviders: [(enabled: Bool, prefix: String, comment: String, baseURL: String, apiKeys: [String], models: [String])] = [
@@ -586,16 +636,7 @@ oauth-excluded-models:
                 "Z.AI Claude-compatible upstream",
                 "https://api.z.ai/api/anthropic",
                 zaiApiKeys,
-                [
-                    "glm-5.1",
-                    "glm-5",
-                    "glm-5-turbo",
-                    "glm-5v-turbo",
-                    "glm-4.7",
-                    "glm-4.7-flash",
-                    "glm-4.6v",
-                    "glm-4.5-air"
-                ]
+                catalogModelsForPrefix("zai")
             ),
             (
                 hasKimi,
@@ -603,9 +644,7 @@ oauth-excluded-models:
                 "Kimi Claude-compatible upstream",
                 "https://api.kimi.com/coding/",
                 kimiApiKeys,
-                [
-                    "kimi-k2-turbo-preview"
-                ]
+                catalogModelsForPrefix("kimi")
             ),
             (
                 hasMiniMax,
@@ -613,9 +652,22 @@ oauth-excluded-models:
                 "MiniMax Claude-compatible upstream",
                 "https://api.minimax.io/anthropic",
                 minimaxApiKeys,
-                [
-                    "MiniMax-M2.7"
-                ]
+                catalogModelsForPrefix("minimax")
+            ),
+            (
+                hasOpenCodeGo,
+                "opencode-go",
+                "OpenCode Go Claude-compatible upstream",
+                "https://opencode.ai/zen/go/v1/messages",
+                openCodeGoApiKeys,
+                catalogModelsForPrefix("opencode-go").map { modelName in
+                    // Strip exactly one leading "opencode-go/" prefix from catalog IDs
+                    // because prefix + force-model-prefix will add it at runtime.
+                    if modelName.hasPrefix("opencode-go/") {
+                        return String(modelName.dropFirst("opencode-go/".count))
+                    }
+                    return modelName
+                }
             )
         ]
 
@@ -659,16 +711,119 @@ oauth-excluded-models:
         return logBuffer.elements()
     }
     
-    /// Scans auth directory for API key files matching the given provider prefix.
+    // MARK: - Connected Providers
+
+    /// Calculates the set of connected providers based on enabled state and valid credentials.
+    /// OAuth providers (claude, codex) require enabled state plus a non-disabled, non-expired auth file.
+    /// API-key hosted providers (zai, minimax, kimi, opencode-go) require enabled state plus
+    /// a non-disabled credential file with a non-empty api_key.
+    /// Disabled providers and providers without valid credentials are excluded.
+    /// - Parameter now: The current time for OAuth expiration checks (injectable for testing).
+    /// - Returns: The set of ServiceTypes that are enabled and have valid credentials.
+    func connectedProviders(now: Date = Date()) -> Set<ServiceType> {
+        let authDir = authDirectoryOverride ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
+
+        guard let files = try? FileManager.default.contentsOfDirectory(at: authDir, includingPropertiesForKeys: nil) else {
+            return []
+        }
+
+        // Date formatters matching AuthManager's parsing
+        let formatterWithFractional = ISO8601DateFormatter()
+        formatterWithFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let formatterStandard = ISO8601DateFormatter()
+        formatterStandard.formatOptions = [.withInternetDateTime]
+        let dateFormatters = [formatterWithFractional, formatterStandard]
+
+        // Collect credential info per service type
+        struct CredentialInfo {
+            let isDisabled: Bool
+            let isExpired: Bool
+            let hasNonEmptyApiKey: Bool
+        }
+
+        var credentialsByType: [ServiceType: [CredentialInfo]] = [:]
+
+        for file in files where file.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: file),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let typeStr = json["type"] as? String,
+                  let serviceType = ServiceType(rawValue: typeStr.lowercased()) else {
+                continue
+            }
+
+            let isDisabled = json["disabled"] as? Bool ?? false
+
+            // Check all supported expiration field names
+            var isExpired = false
+            let expirationFields = ["expired", "expires_at", "expiresAt", "expiration"]
+            for field in expirationFields {
+                if let expiredStr = json[field] as? String {
+                    for formatter in dateFormatters {
+                        if let date = formatter.date(from: expiredStr) {
+                            // Expired when expiration is at or before the current time
+                            isExpired = date <= now
+                            break
+                        }
+                    }
+                    if isExpired { break }
+                }
+            }
+
+            let apiKey = json["api_key"] as? String ?? ""
+            let hasNonEmptyApiKey = !apiKey.isEmpty
+
+            let info = CredentialInfo(isDisabled: isDisabled, isExpired: isExpired, hasNonEmptyApiKey: hasNonEmptyApiKey)
+            credentialsByType[serviceType, default: []].append(info)
+        }
+
+        var connected = Set<ServiceType>()
+
+        let oauthProviderRawValues = Set(Self.oauthProviderKeys.keys)
+
+        for serviceType in ServiceType.allCases {
+            // Must be enabled
+            guard isProviderEnabled(serviceType.rawValue) else { continue }
+
+            let credentials = credentialsByType[serviceType] ?? []
+
+            if oauthProviderRawValues.contains(serviceType.rawValue) {
+                // OAuth provider: needs at least one non-disabled, non-expired credential
+                if credentials.contains(where: { !$0.isDisabled && !$0.isExpired }) {
+                    connected.insert(serviceType)
+                }
+            } else {
+                // API-key provider: needs at least one non-disabled credential with non-empty key
+                if credentials.contains(where: { !$0.isDisabled && $0.hasNonEmptyApiKey }) {
+                    connected.insert(serviceType)
+                }
+            }
+        }
+
+        return connected
+    }
+    
+    /// Scans auth directory for API key files matching the given provider.
+    /// Uses JSON "type" field as the authoritative provider identifier, matching
+    /// the connectedProviders() logic. This alignment ensures config generation
+    /// and connected-provider calculation do not diverge on credential detection.
+    /// Filters out disabled credentials and empty API keys.
     private func scanApiKeys(for provider: ServiceType, in authDir: URL) -> [String] {
         guard let files = try? FileManager.default.contentsOfDirectory(at: authDir, includingPropertiesForKeys: nil) else {
             return []
         }
         return files.compactMap { file in
-            guard file.lastPathComponent.hasPrefix("\(provider.rawValue)-") && file.pathExtension == "json" else { return nil }
+            guard file.pathExtension == "json" else { return nil }
             guard let data = try? Data(contentsOf: file),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let apiKey = json["api_key"] as? String else { return nil }
+                  let apiKey = json["api_key"] as? String,
+                  !apiKey.isEmpty,
+                  (json["disabled"] as? Bool ?? false) == false
+            else { return nil }
+            // Use JSON type field as authoritative provider identifier
+            guard let typeStr = json["type"] as? String,
+                  typeStr.lowercased() == provider.rawValue else {
+                return nil
+            }
             return apiKey
         }
     }

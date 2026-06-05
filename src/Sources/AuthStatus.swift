@@ -6,6 +6,7 @@ enum ServiceType: String, CaseIterable {
     case zai
     case minimax
     case kimi
+    case opencodeGo = "opencode-go"
 
     var displayName: String {
         switch self {
@@ -14,6 +15,7 @@ enum ServiceType: String, CaseIterable {
         case .zai: return "Z.AI GLM"
         case .minimax: return "MiniMax"
         case .kimi: return "Kimi"
+        case .opencodeGo: return "OpenCode Go"
         }
     }
 }

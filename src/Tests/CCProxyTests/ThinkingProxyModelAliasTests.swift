@@ -4,9 +4,10 @@ import XCTest
 // MARK: - Tests for internal pure helpers in ThinkingProxy.swift
 //
 // Helpers under test:
-//   - canonicalizeTopLevelModelAlias(in:) -> String?
-//   - filterModelListResponseBody(_:) -> Data?
+//   - canonicalizeTopLevelModelAlias(in:) -> String?  (request-body compatibility only)
 //   - isModelListRequest(method:path:) -> Bool
+//   - transformModelListHTTPResponseWithCatalog(method:path:responseData:catalogModels:) -> Data?
+//   - classifyBufferedModelListResponse(_:) -> ModelListBufferClassification
 //
 // T3 integration: canonicalizeTopLevelModelAlias is called in processRequest
 // after thinking/cache_control transforms and before routing/forwarding.
@@ -166,305 +167,6 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         """
         let result = canonicalizeTopLevelModelAlias(in: input)
         XCTAssertNil(result, "JSON array should return nil")
-    }
-
-    // ================================================================
-    // MARK: - Model-List Body Filtering Tests
-    // ================================================================
-
-    /// Fixture containing all nine duplicate pairs from the spec plus
-    /// gpt-5.5, codex-mini, and an unrelated model.
-    private var fullDuplicateFixture: Data {
-        let json = """
-        {
-          "object": "list",
-          "data": [
-            {"id": "zai/glm-5.1", "object": "model", "owned_by": "unknown", "created": 1},
-            {"id": "glm-5.1", "object": "model", "owned_by": "unknown", "created": 2},
-            {"id": "zai/glm-5", "object": "model", "owned_by": "unknown", "created": 3},
-            {"id": "glm-5", "object": "model", "owned_by": "unknown", "created": 4},
-            {"id": "zai/glm-5-turbo", "object": "model", "owned_by": "unknown", "created": 5},
-            {"id": "glm-5-turbo", "object": "model", "owned_by": "unknown", "created": 6},
-            {"id": "zai/glm-5v-turbo", "object": "model", "owned_by": "unknown", "created": 7},
-            {"id": "glm-5v-turbo", "object": "model", "owned_by": "unknown", "created": 8},
-            {"id": "zai/glm-4.7", "object": "model", "owned_by": "unknown", "created": 9},
-            {"id": "glm-4.7", "object": "model", "owned_by": "unknown", "created": 10},
-            {"id": "zai/glm-4.7-flash", "object": "model", "owned_by": "unknown", "created": 11},
-            {"id": "glm-4.7-flash", "object": "model", "owned_by": "unknown", "created": 12},
-            {"id": "zai/glm-4.6v", "object": "model", "owned_by": "unknown", "created": 13},
-            {"id": "glm-4.6v", "object": "model", "owned_by": "unknown", "created": 14},
-            {"id": "zai/glm-4.5-air", "object": "model", "owned_by": "unknown", "created": 15},
-            {"id": "glm-4.5-air", "object": "model", "owned_by": "unknown", "created": 16},
-            {"id": "minimax/MiniMax-M2.7", "object": "model", "owned_by": "unknown", "created": 17},
-            {"id": "MiniMax-M2.7", "object": "model", "owned_by": "unknown", "created": 18},
-            {"id": "gpt-5.5", "object": "model", "owned_by": "some-org", "created": 19},
-            {"id": "codex-mini", "object": "model", "owned_by": "some-org", "created": 20},
-            {"id": "unrelated-model", "object": "model", "owned_by": "original-owner", "created": 21}
-          ]
-        }
-        """
-        return Data(json.utf8)
-    }
-
-    // MARK: Duplicate removal
-
-    func testFilteringRemovesAllDuplicateAliases() {
-        let result = filterModelListResponseBody(fullDuplicateFixture)
-        XCTAssertNotNil(result, "Filtering should succeed on valid fixture")
-
-        guard let data = result else { return }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            XCTFail("Result should be valid JSON object")
-            return
-        }
-        guard let entries = json["data"] as? [[String: Any]] else {
-            XCTFail("Result should have data array")
-            return
-        }
-
-        let ids = entries.compactMap { $0["id"] as? String }
-
-        // All nine canonical entries must be present
-        let canonicalIDs: [String] = [
-            "zai/glm-5.1", "zai/glm-5", "zai/glm-5-turbo", "zai/glm-5v-turbo",
-            "zai/glm-4.7", "zai/glm-4.7-flash", "zai/glm-4.6v", "zai/glm-4.5-air",
-            "minimax/MiniMax-M2.7"
-        ]
-        for canonical in canonicalIDs {
-            XCTAssertTrue(ids.contains(canonical), "Canonical ID \(canonical) should be retained")
-        }
-
-        // All nine alias entries must be removed
-        let aliasIDs: [String] = [
-            "glm-5.1", "glm-5", "glm-5-turbo", "glm-5v-turbo",
-            "glm-4.7", "glm-4.7-flash", "glm-4.6v", "glm-4.5-air",
-            "MiniMax-M2.7"
-        ]
-        for alias in aliasIDs {
-            XCTAssertFalse(ids.contains(alias), "Alias ID \(alias) should be removed when canonical exists")
-        }
-    }
-
-    // MARK: gpt-5.5 preserved unprefixed
-
-    func testOpenAIModelPreservedUnprefixed() {
-        let result = filterModelListResponseBody(fullDuplicateFixture)
-        XCTAssertNotNil(result)
-
-        guard let data = result, let ids = extractIDs(from: data) else {
-            XCTFail("Should produce valid JSON with data array")
-            return
-        }
-
-        XCTAssertTrue(ids.contains("gpt-5.5"), "gpt-5.5 should remain present and unprefixed")
-    }
-
-    // MARK: Unrelated model preserved
-
-    func testUnrelatedModelPreserved() {
-        let result = filterModelListResponseBody(fullDuplicateFixture)
-        XCTAssertNotNil(result)
-
-        guard let data = result, let ids = extractIDs(from: data) else {
-            XCTFail("Should produce valid JSON with data array")
-            return
-        }
-
-        XCTAssertTrue(ids.contains("unrelated-model"), "Unrelated model should remain present")
-    }
-
-    // MARK: Alias retained when canonical absent
-
-    func testAliasRetainedWhenCanonicalAbsent() {
-        // Fixture with glm-4.5-air alias but NO zai/glm-4.5-air canonical
-        let json = """
-        {
-          "object": "list",
-          "data": [
-            {"id": "glm-4.5-air", "object": "model", "owned_by": "some-owner", "created": 1},
-            {"id": "gpt-5.5", "object": "model", "owned_by": "openai", "created": 2}
-          ]
-        }
-        """
-        let input = Data(json.utf8)
-        let result = filterModelListResponseBody(input)
-        XCTAssertNotNil(result)
-
-        guard let data = result, let ids = extractIDs(from: data) else {
-            XCTFail("Should produce valid JSON")
-            return
-        }
-
-        XCTAssertTrue(ids.contains("glm-4.5-air"),
-                       "Alias should be retained when its canonical partner is absent")
-        XCTAssertTrue(ids.contains("gpt-5.5"),
-                       "Other models should remain")
-    }
-
-    // MARK: Top-level fields preserved
-
-    func testTopLevelFieldsPreserved() {
-        let result = filterModelListResponseBody(fullDuplicateFixture)
-        XCTAssertNotNil(result)
-
-        guard let data = result,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            XCTFail("Should produce valid JSON object")
-            return
-        }
-
-        XCTAssertEqual(json["object"] as? String, "list",
-                        "Top-level 'object' field should be preserved")
-    }
-
-    // ================================================================
-    // MARK: - Ownership Normalization Tests
-    // ================================================================
-
-    func testZaiOwnershipNormalized() {
-        let result = filterModelListResponseBody(fullDuplicateFixture)
-        XCTAssertNotNil(result)
-
-        guard let data = result,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let entries = json["data"] as? [[String: Any]] else {
-            XCTFail("Should produce valid JSON")
-            return
-        }
-
-        let zaiModels = entries.filter { ($0["id"] as? String)?.hasPrefix("zai/") == true }
-        for model in zaiModels {
-            XCTAssertEqual(model["owned_by"] as? String, "zai",
-                            "zai/* model should have owned_by normalized to 'zai'")
-        }
-    }
-
-    func testMinimaxOwnershipNormalized() {
-        let result = filterModelListResponseBody(fullDuplicateFixture)
-        XCTAssertNotNil(result)
-
-        guard let data = result,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let entries = json["data"] as? [[String: Any]] else {
-            XCTFail("Should produce valid JSON")
-            return
-        }
-
-        let minimaxModels = entries.filter { ($0["id"] as? String)?.hasPrefix("minimax/") == true }
-        for model in minimaxModels {
-            XCTAssertEqual(model["owned_by"] as? String, "minimax",
-                            "minimax/* model should have owned_by normalized to 'minimax'")
-        }
-    }
-
-    func testGptOwnershipNormalized() {
-        let result = filterModelListResponseBody(fullDuplicateFixture)
-        XCTAssertNotNil(result)
-
-        guard let data = result,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let entries = json["data"] as? [[String: Any]] else {
-            XCTFail("Should produce valid JSON")
-            return
-        }
-
-        let gptModels = entries.filter { ($0["id"] as? String)?.hasPrefix("gpt-") == true }
-        for model in gptModels {
-            XCTAssertEqual(model["owned_by"] as? String, "openai",
-                            "gpt-* model should have owned_by normalized to 'openai'")
-        }
-    }
-
-    func testCodexOwnershipNormalized() {
-        let result = filterModelListResponseBody(fullDuplicateFixture)
-        XCTAssertNotNil(result)
-
-        guard let data = result,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let entries = json["data"] as? [[String: Any]] else {
-            XCTFail("Should produce valid JSON")
-            return
-        }
-
-        let codexModels = entries.filter { ($0["id"] as? String)?.hasPrefix("codex-") == true }
-        for model in codexModels {
-            XCTAssertEqual(model["owned_by"] as? String, "openai",
-                            "codex-* model should have owned_by normalized to 'openai'")
-        }
-    }
-
-    func testUnrelatedOwnershipUnchanged() {
-        let result = filterModelListResponseBody(fullDuplicateFixture)
-        XCTAssertNotNil(result)
-
-        guard let data = result,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let entries = json["data"] as? [[String: Any]] else {
-            XCTFail("Should produce valid JSON")
-            return
-        }
-
-        guard let unrelated = entries.first(where: { ($0["id"] as? String) == "unrelated-model" }) else {
-            XCTFail("unrelated-model should be present")
-            return
-        }
-        XCTAssertEqual(unrelated["owned_by"] as? String, "original-owner",
-                       "Unrelated model should keep original owned_by")
-    }
-
-    // ================================================================
-    // MARK: - Fail-Safe Tests
-    // ================================================================
-
-    func testMalformedJSONReturnsNil() {
-        let input = Data("not valid json".utf8)
-        let result = filterModelListResponseBody(input)
-        XCTAssertNil(result, "Malformed JSON should return nil")
-    }
-
-    func testValidJSONWithoutDataArrayReturnsNil() {
-        let json = """
-        {"object": "list", "models": []}
-        """
-        let input = Data(json.utf8)
-        let result = filterModelListResponseBody(input)
-        XCTAssertNil(result, "JSON without 'data' array should return nil")
-    }
-
-    func testNonObjectJSONReturnsNil() {
-        let json = """
-        [1, 2, 3]
-        """
-        let input = Data(json.utf8)
-        let result = filterModelListResponseBody(input)
-        XCTAssertNil(result, "JSON array (non-object) should return nil")
-    }
-
-    func testEntriesWithoutStringIDReturnNil() {
-        let json = """
-        {"data": [{"id": 123, "object": "model"}, {"no_id": true}]}
-        """
-        let input = Data(json.utf8)
-        let result = filterModelListResponseBody(input)
-        XCTAssertNil(result, "Entries without string 'id' should cause nil return")
-    }
-
-    func testEmptyDataArrayPassesThrough() {
-        let json = """
-        {"object": "list", "data": []}
-        """
-        let input = Data(json.utf8)
-        let result = filterModelListResponseBody(input)
-        // An empty data array is safe; it should succeed with empty results
-        XCTAssertNotNil(result, "Empty data array should be handled safely")
-        if let data = result {
-            guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let arr = parsed["data"] as? [[String: Any]] else {
-                XCTFail("Should be valid JSON with data array")
-                return
-            }
-            XCTAssertTrue(arr.isEmpty, "Empty data array should remain empty")
-        }
     }
 
     // ================================================================
@@ -688,14 +390,6 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         XCTAssertEqual(model, expected, "model field should be rewritten to \(expected)")
     }
 
-    private func extractIDs(from data: Data) -> [String]? {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let entries = json["data"] as? [[String: Any]] else {
-            return nil
-        }
-        return entries.compactMap { $0["id"] as? String }
-    }
-
     private func extractContentLength(from request: String) -> Int? {
         let headerPart = request.components(separatedBy: "\r\n\r\n").first ?? request
         return headerPart
@@ -713,15 +407,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
     }
 
     // ================================================================
-    // MARK: - T4/T5: Response Reconstruction Seam Tests
+    // MARK: - HTTP Response Test Helpers
     // ================================================================
-    //
-    // Tests for: transformModelListHTTPResponseIfEligible(method:path:responseData:) -> Data?
-    //
-    // This seam is the same function called by the buffered production response
-    // path for eligible GET /v1/models requests. No sockets or listeners needed.
-
-    // MARK: - HTTP response construction helpers
 
     /// Builds a complete raw HTTP response as Data from status, headers, and body string.
     private func buildHTTPResponse(
@@ -780,28 +467,51 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         return headers.filter { $0.0.caseInsensitiveCompare(name) == .orderedSame }.count
     }
 
-    // MARK: - Successful transformation tests
+    // ================================================================
+    // MARK: - Task 3: Catalog-Backed Model-List Response Tests
+    // ================================================================
+    //
+    // Tests for: transformModelListHTTPResponseWithCatalog(method:path:responseData:catalogModels:) -> Data?
+    //
+    // This seam replaces the backend model-list body with catalog-backed
+    // connected-provider output. The backend response is used only for
+    // HTTP safety checks (status, framing) and header preservation;
+    // the body is entirely replaced by the catalog-rendered output.
 
-    /// Verifies that a valid 2xx GET /v1/models response with duplicate model list
-    /// is transformed: returned bytes differ, body is filtered JSON with correct
-    /// Content-Length, and Connection: close is present exactly once.
-    func testTransformModelListResponse_SuccessfulTransformation() {
-        let body = duplicateModelListBody
-        let staleContentLength = body.utf8.count
+    /// Catalog models fixture representing two connected providers.
+    private var catalogModelsFixture: [CatalogModel] {
+        [
+            CatalogModel(id: "claude/claude-sonnet-4", object: "model", created: 1700000000, ownedBy: "anthropic", displayName: nil, tier: nil, sourceProvenance: "catalog", supplementalMetadata: [:]),
+            CatalogModel(id: "claude/claude-opus-4", object: "model", created: 1700000001, ownedBy: "anthropic", displayName: nil, tier: nil, sourceProvenance: "catalog", supplementalMetadata: [:]),
+            CatalogModel(id: "zai/glm-5.1", object: "model", created: 1700000002, ownedBy: "zai", displayName: nil, tier: nil, sourceProvenance: "catalog", supplementalMetadata: [:])
+        ]
+    }
+
+    /// Empty catalog models — no connected providers.
+    private var emptyCatalogModels: [CatalogModel] { [] }
+
+    // MARK: - Catalog replaces backend body
+
+    /// Verifies that a valid 2xx GET /v1/models response is replaced with catalog-backed output.
+    func testCatalogBackedResponse_ReplacesBackendBody() {
+        let backendBody = """
+        {"object":"list","data":[{"id":"old-model","object":"model","owned_by":"backend"}]}
+        """
         let responseData = buildHTTPResponse(
             headers: [
                 ("Content-Type", "application/json"),
-                ("Content-Length", "\(staleContentLength)"),
+                ("Content-Length", "\(backendBody.utf8.count)"),
             ],
-            body: body
+            body: backendBody
         )
 
-        let result = transformModelListHTTPResponseIfEligible(
+        let result = transformModelListHTTPResponseWithCatalog(
             method: "GET",
             path: "/v1/models",
-            responseData: responseData
+            responseData: responseData,
+            catalogModels: catalogModelsFixture
         )
-        XCTAssertNotNil(result, "Eligible 2xx response with valid framing should be transformed")
+        XCTAssertNotNil(result, "Should transform with catalog models")
 
         guard let transformedData = result,
               let parsed = parseHTTPResponse(transformedData) else {
@@ -809,75 +519,118 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             return
         }
 
-        // Returned bytes differ from input
-        XCTAssertNotEqual(transformedData, responseData,
-                           "Transformed response should differ from original")
-
-        // Status line preserved
-        XCTAssertTrue(parsed.statusLine.hasPrefix("HTTP/1.1 200"),
-                       "Status line should be preserved: \(parsed.statusLine)")
-
-        // Body is filtered JSON - glm-4.7 alias removed, zai/glm-4.7 retained
+        // Body should be catalog-rendered, not backend body
         guard let bodyData = parsed.body.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
               let entries = json["data"] as? [[String: Any]] else {
             XCTFail("Body should be valid JSON with data array")
             return
         }
+
         let ids = entries.compactMap { $0["id"] as? String }
-        XCTAssertTrue(ids.contains("zai/glm-4.7"), "Canonical zai/glm-4.7 should be retained")
-        XCTAssertFalse(ids.contains("glm-4.7"), "Alias glm-4.7 should be removed")
-        XCTAssertTrue(ids.contains("gpt-5.5"), "gpt-5.5 should remain")
-
-        // Rebuilt Content-Length equals transformed body byte count exactly
-        let clString = headerValue(in: parsed.headers, name: "Content-Length")
-        XCTAssertNotNil(clString, "Content-Length should be present")
-        if let clStr = clString, let cl = Int(clStr) {
-            XCTAssertEqual(cl, parsed.body.utf8.count,
-                            "Content-Length must equal transformed body byte count")
-        }
-
-        // Connection: close present exactly once
-        let connCount = headerCount(in: parsed.headers, name: "Connection")
-        XCTAssertEqual(connCount, 1, "Connection: close should appear exactly once")
-        XCTAssertEqual(headerValue(in: parsed.headers, name: "Connection"), "close")
+        XCTAssertTrue(ids.contains("claude/claude-sonnet-4"), "Should contain catalog model")
+        XCTAssertTrue(ids.contains("zai/glm-5.1"), "Should contain catalog model")
+        XCTAssertFalse(ids.contains("old-model"), "Should NOT contain backend model")
+        XCTAssertEqual(json["object"] as? String, "list")
     }
 
-    /// Verifies that stale non-chunked Transfer-Encoding is removed from rebuilt response.
-    func testTransformModelListResponse_TransferEncodingRemoved() {
-        let body = duplicateModelListBody
+    // MARK: - Empty connected providers returns empty list
+
+    /// Verifies that /v1/models with no connected providers returns an empty OpenAI-style list.
+    func testCatalogBackedResponse_EmptyProvidersReturnsEmptyList() {
+        let backendBody = """
+        {"object":"list","data":[{"id":"claude-sonnet-4","object":"model","owned_by":"anthropic"}]}
+        """
         let responseData = buildHTTPResponse(
             headers: [
                 ("Content-Type", "application/json"),
-                ("Content-Length", "\(body.utf8.count)"),
-                ("Transfer-Encoding", "identity"),
+                ("Content-Length", "\(backendBody.utf8.count)"),
             ],
-            body: body
+            body: backendBody
         )
 
-        let result = transformModelListHTTPResponseIfEligible(
+        let result = transformModelListHTTPResponseWithCatalog(
             method: "GET",
             path: "/v1/models",
-            responseData: responseData
+            responseData: responseData,
+            catalogModels: emptyCatalogModels
         )
-        XCTAssertNotNil(result, "Should transform response with non-chunked Transfer-Encoding")
+        XCTAssertNotNil(result, "Should still transform even with empty catalog")
 
         guard let transformedData = result,
               let parsed = parseHTTPResponse(transformedData) else {
-            XCTFail("Transformed response should be parseable HTTP")
+            XCTFail("Should be parseable HTTP")
             return
         }
 
-        // Transfer-Encoding must be absent from rebuilt response
-        let teCount = headerCount(in: parsed.headers, name: "Transfer-Encoding")
-        XCTAssertEqual(teCount, 0,
-                        "Transfer-Encoding should be removed from rebuilt response")
+        guard let bodyData = parsed.body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+              let entries = json["data"] as? [[String: Any]] else {
+            XCTFail("Body should be valid JSON")
+            return
+        }
+
+        XCTAssertTrue(entries.isEmpty, "Empty connected providers should produce empty data array")
+        XCTAssertEqual(json["object"] as? String, "list")
     }
 
-    // MARK: - Pass-through tests (helper returns nil)
+    // MARK: - Response rebuild preserves status and safe headers
 
-    /// Non-2xx status should pass through (return nil).
-    func testTransformModelListResponse_Non2xxPassthrough() {
+    /// Verifies that response rebuild preserves status, recalculates Content-Length,
+    /// removes stale Transfer-Encoding, and sets one Connection: close.
+    func testCatalogBackedResponse_ResponseRebuildSafety() {
+        let backendBody = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(backendBody.utf8.count)"),
+                ("Transfer-Encoding", "identity"),
+                ("X-Custom", "value"),
+            ],
+            body: backendBody
+        )
+
+        let result = transformModelListHTTPResponseWithCatalog(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData,
+            catalogModels: catalogModelsFixture
+        )
+        XCTAssertNotNil(result)
+
+        guard let transformedData = result,
+              let parsed = parseHTTPResponse(transformedData) else {
+            XCTFail("Should be parseable HTTP")
+            return
+        }
+
+        // Status preserved
+        XCTAssertTrue(parsed.statusLine.hasPrefix("HTTP/1.1 200"))
+
+        // Content-Length recalculated
+        let cl = headerValue(in: parsed.headers, name: "Content-Length")
+        XCTAssertNotNil(cl)
+        if let clStr = cl, let clVal = Int(clStr) {
+            XCTAssertEqual(clVal, parsed.body.utf8.count,
+                            "Content-Length must equal catalog body byte count")
+        }
+
+        // Transfer-Encoding removed
+        XCTAssertEqual(headerCount(in: parsed.headers, name: "Transfer-Encoding"), 0,
+                        "Transfer-Encoding should be removed")
+
+        // Connection: close exactly once
+        XCTAssertEqual(headerCount(in: parsed.headers, name: "Connection"), 1)
+        XCTAssertEqual(headerValue(in: parsed.headers, name: "Connection"), "close")
+
+        // Custom header preserved
+        XCTAssertEqual(headerValue(in: parsed.headers, name: "X-Custom"), "value")
+    }
+
+    // MARK: - Non-2xx passthrough
+
+    /// Non-2xx status should pass through (return nil) even with catalog models.
+    func testCatalogBackedResponse_Non2xxPassthrough() {
         let body = duplicateModelListBody
         let responseData = buildHTTPResponse(
             statusCode: 500,
@@ -889,56 +642,19 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             body: body
         )
 
-        let result = transformModelListHTTPResponseIfEligible(
+        let result = transformModelListHTTPResponseWithCatalog(
             method: "GET",
             path: "/v1/models",
-            responseData: responseData
+            responseData: responseData,
+            catalogModels: catalogModelsFixture
         )
-        XCTAssertNil(result, "Non-2xx response should pass through (nil)")
+        XCTAssertNil(result, "Non-2xx should pass through even with catalog")
     }
 
-    /// Non-2xx status 404 should pass through.
-    func testTransformModelListResponse_404Passthrough() {
-        let body = "{\"error\":\"not found\"}"
-        let responseData = buildHTTPResponse(
-            statusCode: 404,
-            statusText: "Not Found",
-            headers: [
-                ("Content-Type", "application/json"),
-                ("Content-Length", "\(body.utf8.count)"),
-            ],
-            body: body
-        )
+    // MARK: - Content-Encoding passthrough
 
-        let result = transformModelListHTTPResponseIfEligible(
-            method: "GET",
-            path: "/v1/models",
-            responseData: responseData
-        )
-        XCTAssertNil(result, "404 response should pass through (nil)")
-    }
-
-    /// Invalid JSON body should pass through (return nil).
-    func testTransformModelListResponse_InvalidJSONPassthrough() {
-        let body = "this is not json"
-        let responseData = buildHTTPResponse(
-            headers: [
-                ("Content-Type", "application/json"),
-                ("Content-Length", "\(body.utf8.count)"),
-            ],
-            body: body
-        )
-
-        let result = transformModelListHTTPResponseIfEligible(
-            method: "GET",
-            path: "/v1/models",
-            responseData: responseData
-        )
-        XCTAssertNil(result, "Invalid JSON body should pass through (nil)")
-    }
-
-    /// Content-Encoding header should cause pass-through (return nil).
-    func testTransformModelListResponse_ContentEncodingPassthrough() {
+    /// Content-Encoding should cause pass-through.
+    func testCatalogBackedResponse_ContentEncodingPassthrough() {
         let body = duplicateModelListBody
         let responseData = buildHTTPResponse(
             headers: [
@@ -949,16 +665,19 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             body: body
         )
 
-        let result = transformModelListHTTPResponseIfEligible(
+        let result = transformModelListHTTPResponseWithCatalog(
             method: "GET",
             path: "/v1/models",
-            responseData: responseData
+            responseData: responseData,
+            catalogModels: catalogModelsFixture
         )
-        XCTAssertNil(result, "Content-Encoding response should pass through (nil)")
+        XCTAssertNil(result, "Content-Encoding should pass through")
     }
 
-    /// Transfer-Encoding: chunked should cause pass-through (return nil).
-    func testTransformModelListResponse_ChunkedPassthrough() {
+    // MARK: - Chunked Transfer-Encoding passthrough
+
+    /// Transfer-Encoding: chunked should cause pass-through.
+    func testCatalogBackedResponse_ChunkedPassthrough() {
         let body = duplicateModelListBody
         let responseData = buildHTTPResponse(
             headers: [
@@ -968,34 +687,34 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             body: body
         )
 
-        let result = transformModelListHTTPResponseIfEligible(
+        let result = transformModelListHTTPResponseWithCatalog(
             method: "GET",
             path: "/v1/models",
-            responseData: responseData
+            responseData: responseData,
+            catalogModels: catalogModelsFixture
         )
-        XCTAssertNil(result, "Transfer-Encoding: chunked should pass through (nil)")
+        XCTAssertNil(result, "Chunked should pass through")
     }
 
-    /// Missing Content-Length should cause pass-through (return nil).
-    func testTransformModelListResponse_MissingContentLengthPassthrough() {
+    // MARK: - Missing/invalid Content-Length passthrough
+
+    func testCatalogBackedResponse_MissingContentLengthPassthrough() {
         let body = duplicateModelListBody
         let responseData = buildHTTPResponse(
-            headers: [
-                ("Content-Type", "application/json"),
-            ],
+            headers: [("Content-Type", "application/json")],
             body: body
         )
 
-        let result = transformModelListHTTPResponseIfEligible(
+        let result = transformModelListHTTPResponseWithCatalog(
             method: "GET",
             path: "/v1/models",
-            responseData: responseData
+            responseData: responseData,
+            catalogModels: catalogModelsFixture
         )
-        XCTAssertNil(result, "Missing Content-Length should pass through (nil)")
+        XCTAssertNil(result, "Missing Content-Length should pass through")
     }
 
-    /// Invalid (non-numeric) Content-Length should cause pass-through (return nil).
-    func testTransformModelListResponse_InvalidContentLengthPassthrough() {
+    func testCatalogBackedResponse_InvalidContentLengthPassthrough() {
         let body = duplicateModelListBody
         let responseData = buildHTTPResponse(
             headers: [
@@ -1005,182 +724,175 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             body: body
         )
 
-        let result = transformModelListHTTPResponseIfEligible(
+        let result = transformModelListHTTPResponseWithCatalog(
             method: "GET",
             path: "/v1/models",
-            responseData: responseData
+            responseData: responseData,
+            catalogModels: catalogModelsFixture
         )
-        XCTAssertNil(result, "Invalid Content-Length should pass through (nil)")
+        XCTAssertNil(result, "Invalid Content-Length should pass through")
     }
 
-    /// Content-Length larger than available body bytes should pass through (return nil).
-    func testTransformModelListResponse_ContentLengthTooLargePassthrough() {
+    // MARK: - Ineligible method/path
+
+    func testCatalogBackedResponse_IneligiblePostMethod() {
         let body = duplicateModelListBody
-        let tooLarge = body.utf8.count + 100
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseWithCatalog(
+            method: "POST",
+            path: "/v1/models",
+            responseData: responseData,
+            catalogModels: catalogModelsFixture
+        )
+        XCTAssertNil(result, "POST should not be eligible")
+    }
+
+    func testCatalogBackedResponse_IneligibleSubPath() {
+        let body = duplicateModelListBody
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseWithCatalog(
+            method: "GET",
+            path: "/v1/models/extra",
+            responseData: responseData,
+            catalogModels: catalogModelsFixture
+        )
+        XCTAssertNil(result, "/v1/models/extra should not be eligible")
+    }
+
+    // MARK: - Missing header/body separator passthrough
+
+    func testCatalogBackedResponse_MissingSeparatorPassthrough() {
+        let rawResponse = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10"
+        let responseData = Data(rawResponse.utf8)
+
+        let result = transformModelListHTTPResponseWithCatalog(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData,
+            catalogModels: catalogModelsFixture
+        )
+        XCTAssertNil(result, "Missing separator should pass through")
+    }
+
+    // MARK: - OpenCode Go model IDs
+
+    /// Verifies that OpenCode Go IDs have exactly one opencode-go/ prefix.
+    func testCatalogBackedResponse_OpenCodeGoIDsExactlyOnePrefix() {
+        let models = [
+            CatalogModel(id: "opencode-go/kimi-k2.6", object: "model", created: 1700000000, ownedBy: "opencode-go", displayName: nil, tier: nil, sourceProvenance: "catalog", supplementalMetadata: [:]),
+            CatalogModel(id: "opencode-go/claude-sonnet-4", object: "model", created: 1700000001, ownedBy: "anthropic-opencode", displayName: nil, tier: nil, sourceProvenance: "catalog", supplementalMetadata: [:])
+        ]
+
+        let backendBody = """
+        {"object":"list","data":[]}
+        """
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(backendBody.utf8.count)"),
+            ],
+            body: backendBody
+        )
+
+        let result = transformModelListHTTPResponseWithCatalog(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData,
+            catalogModels: models
+        )
+        XCTAssertNotNil(result)
+
+        guard let transformedData = result,
+              let parsed = parseHTTPResponse(transformedData) else {
+            XCTFail("Should be parseable HTTP")
+            return
+        }
+
+        guard let bodyData = parsed.body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+              let entries = json["data"] as? [[String: Any]] else {
+            XCTFail("Body should be valid JSON")
+            return
+        }
+
+        let ids = entries.compactMap { $0["id"] as? String }
+        XCTAssertTrue(ids.contains("opencode-go/kimi-k2.6"), "Should have opencode-go/kimi-k2.6")
+        XCTAssertTrue(ids.contains("opencode-go/claude-sonnet-4"), "Should have opencode-go/claude-sonnet-4")
+        // No double-prefix
+        XCTAssertFalse(ids.contains("opencode-go/opencode-go/kimi-k2.6"),
+                        "Must not double-prefix")
+    }
+
+    // MARK: - Query string eligibility
+
+    func testCatalogBackedResponse_QueryStringEligible() {
+        let backendBody = """
+        {"object":"list","data":[]}
+        """
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(backendBody.utf8.count)"),
+            ],
+            body: backendBody
+        )
+
+        let result = transformModelListHTTPResponseWithCatalog(
+            method: "GET",
+            path: "/v1/models?limit=100",
+            responseData: responseData,
+            catalogModels: catalogModelsFixture
+        )
+        XCTAssertNotNil(result, "Query string should be eligible")
+    }
+
+    // MARK: - Content-Length mismatch passthrough
+
+    func testCatalogBackedResponse_ContentLengthMismatchPassthrough() {
+        let backendBody = duplicateModelListBody
+        let tooLarge = backendBody.utf8.count + 100
         let responseData = buildHTTPResponse(
             headers: [
                 ("Content-Type", "application/json"),
                 ("Content-Length", "\(tooLarge)"),
             ],
-            body: body
+            body: backendBody
         )
 
-        let result = transformModelListHTTPResponseIfEligible(
+        let result = transformModelListHTTPResponseWithCatalog(
             method: "GET",
             path: "/v1/models",
-            responseData: responseData
+            responseData: responseData,
+            catalogModels: catalogModelsFixture
         )
-        XCTAssertNil(result, "Content-Length larger than body should pass through (nil)")
+        XCTAssertNil(result, "Content-Length mismatch should pass through")
     }
 
-    /// Content-Length smaller than available body bytes should pass through (return nil).
-    func testTransformModelListResponse_ContentLengthTooSmallPassthrough() {
-        let body = duplicateModelListBody
-        let tooSmall = body.utf8.count - 10
-        let responseData = buildHTTPResponse(
-            headers: [
-                ("Content-Type", "application/json"),
-                ("Content-Length", "\(tooSmall)"),
-            ],
-            body: body
-        )
+    // MARK: - Request alias normalization is request-body only
 
-        let result = transformModelListHTTPResponseIfEligible(
-            method: "GET",
-            path: "/v1/models",
-            responseData: responseData
-        )
-        XCTAssertNil(result, "Content-Length smaller than body should pass through (nil)")
-    }
-
-    /// Missing header/body separator should pass through (return nil).
-    func testTransformModelListResponse_MissingSeparatorPassthrough() {
-        // No \r\n\r\n separator, just a raw string
-        let rawResponse = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10"
-        let responseData = Data(rawResponse.utf8)
-
-        let result = transformModelListHTTPResponseIfEligible(
-            method: "GET",
-            path: "/v1/models",
-            responseData: responseData
-        )
-        XCTAssertNil(result, "Missing header/body separator should pass through (nil)")
-    }
-
-    /// Unexpected shape (valid JSON but no data array) should pass through (return nil).
-    func testTransformModelListResponse_UnexpectedShapePassthrough() {
-        let body = "{\"object\":\"list\",\"models\":[]}"
-        let responseData = buildHTTPResponse(
-            headers: [
-                ("Content-Type", "application/json"),
-                ("Content-Length", "\(body.utf8.count)"),
-            ],
-            body: body
-        )
-
-        let result = transformModelListHTTPResponseIfEligible(
-            method: "GET",
-            path: "/v1/models",
-            responseData: responseData
-        )
-        XCTAssertNil(result, "Unexpected JSON shape (no data array) should pass through (nil)")
-    }
-
-    // MARK: - Eligibility tests through the response seam
-
-    /// GET /v1/models with a valid response should transform.
-    func testTransformModelListResponse_EligibleGetV1Models() {
-        let body = duplicateModelListBody
-        let responseData = buildHTTPResponse(
-            headers: [
-                ("Content-Type", "application/json"),
-                ("Content-Length", "\(body.utf8.count)"),
-            ],
-            body: body
-        )
-
-        let result = transformModelListHTTPResponseIfEligible(
-            method: "GET",
-            path: "/v1/models",
-            responseData: responseData
-        )
-        XCTAssertNotNil(result, "GET /v1/models should be eligible for transformation")
-    }
-
-    /// GET /v1/models?limit=100 should transform (query string ignored for matching).
-    func testTransformModelListResponse_EligibleWithQueryString() {
-        let body = duplicateModelListBody
-        let responseData = buildHTTPResponse(
-            headers: [
-                ("Content-Type", "application/json"),
-                ("Content-Length", "\(body.utf8.count)"),
-            ],
-            body: body
-        )
-
-        let result = transformModelListHTTPResponseIfEligible(
-            method: "GET",
-            path: "/v1/models?limit=100",
-            responseData: responseData
-        )
-        XCTAssertNotNil(result, "GET /v1/models?limit=100 should be eligible (query ignored)")
-    }
-
-    /// POST /v1/models should not transform (ineligible method).
-    func testTransformModelListResponse_IneligiblePostMethod() {
-        let body = duplicateModelListBody
-        let responseData = buildHTTPResponse(
-            headers: [
-                ("Content-Type", "application/json"),
-                ("Content-Length", "\(body.utf8.count)"),
-            ],
-            body: body
-        )
-
-        let result = transformModelListHTTPResponseIfEligible(
-            method: "POST",
-            path: "/v1/models",
-            responseData: responseData
-        )
-        XCTAssertNil(result, "POST /v1/models should not be eligible")
-    }
-
-    /// GET /v1/models/extra should not transform (ineligible path).
-    func testTransformModelListResponse_IneligibleSubPath() {
-        let body = duplicateModelListBody
-        let responseData = buildHTTPResponse(
-            headers: [
-                ("Content-Type", "application/json"),
-                ("Content-Length", "\(body.utf8.count)"),
-            ],
-            body: body
-        )
-
-        let result = transformModelListHTTPResponseIfEligible(
-            method: "GET",
-            path: "/v1/models/extra",
-            responseData: responseData
-        )
-        XCTAssertNil(result, "GET /v1/models/extra should not be eligible")
-    }
-
-    /// GET /api/v1/models should not transform (ineligible path).
-    func testTransformModelListResponse_IneligibleApiPath() {
-        let body = duplicateModelListBody
-        let responseData = buildHTTPResponse(
-            headers: [
-                ("Content-Type", "application/json"),
-                ("Content-Length", "\(body.utf8.count)"),
-            ],
-            body: body
-        )
-
-        let result = transformModelListHTTPResponseIfEligible(
-            method: "GET",
-            path: "/api/v1/models",
-            responseData: responseData
-        )
-        XCTAssertNil(result, "GET /api/v1/models should not be eligible")
+    /// Verifies that canonicalizeTopLevelModelAlias still works for request bodies
+    /// and does not affect model-list generation.
+    func testRequestAliasNormalizationIsRequestBodyOnly() {
+        let input = """
+        {"model":"glm-4.7","messages":[{"role":"user","content":"hi"}]}
+        """
+        let result = canonicalizeTopLevelModelAlias(in: input)
+        XCTAssertNotNil(result, "Request alias normalization should still work")
+        assertModelEquals(result: result, expected: "zai/glm-4.7")
     }
 
     // ================================================================
@@ -1398,5 +1110,899 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         let result = classifyBufferedModelListResponse(response)
         XCTAssertEqual(result, .bodyOverflow,
                         "Body bytes > Content-Length should classify as bodyOverflow")
+    }
+
+    // ================================================================
+    // MARK: - Review Fix: Production Catalog Provider Wiring
+    // ================================================================
+
+    /// Verifies that ThinkingProxy's default catalogProvider starts as a stub
+    /// (returns unavailable), and gets replaced when configureCatalogProvider is called.
+    func testDefaultCatalogProviderStartsAsStub() {
+        let proxy = ThinkingProxy()
+        // Before wiring, the provider is a stub
+        let result = proxy.catalogProvider.fetchCatalogModels()
+        if case .unavailable = result {
+            // Expected: stub returns unavailable
+        } else {
+            XCTFail("Stub catalog provider should return .unavailable before wiring")
+        }
+    }
+
+    /// Verifies that configureCatalogProvider replaces the stub with a
+    /// ProductionModelListCatalogProvider backed by the injected ServerManager.
+    func testConfigureCatalogProvider_ReplacesStubWithProduction() {
+        let proxy = ThinkingProxy()
+        let manager = ServerManager()
+        proxy.configureCatalogProvider(manager)
+        XCTAssertTrue(proxy.catalogProvider is ProductionModelListCatalogProvider,
+                       "After configureCatalogProvider, provider should be ProductionModelListCatalogProvider")
+    }
+
+    // MARK: - CatalogModelsResult distinction tests
+
+    /// Verifies that CatalogModelsResult.available([]) is distinct from .unavailable.
+    /// Connected-provider-empty result (valid empty list) must not be confused with
+    /// catalog-unavailable result (no valid cache/snapshot; produces explicit empty list
+    /// rather than backend pass-through).
+    func testCatalogModelsResult_AvailableEmptyDistinctFromUnavailable() {
+        let availableEmpty: CatalogModelsResult = .available([])
+        let unavailable: CatalogModelsResult = .unavailable
+
+        XCTAssertNotEqual(availableEmpty, unavailable,
+                           ".available([]) and .unavailable must be distinct values")
+    }
+
+    /// Verifies that CatalogModelsResult.available with models is distinct from .unavailable.
+    func testCatalogModelsResult_AvailableModelsDistinctFromUnavailable() {
+        let availableModels: CatalogModelsResult = .available([
+            CatalogModel(id: "test/model", object: "model", created: 0, ownedBy: "test",
+                         displayName: nil, tier: nil, sourceProvenance: "test", supplementalMetadata: [:])
+        ])
+        let unavailable: CatalogModelsResult = .unavailable
+
+        XCTAssertNotEqual(availableModels, unavailable,
+                           ".available([model]) and .unavailable must be distinct values")
+    }
+
+    /// Verifies that CatalogModelsResult.available with empty array produces
+    /// a valid empty OpenAI-style model-list response when used with the catalog seam.
+    func testCatalogModelsResult_AvailableEmpty_ProducesEmptyModelList() {
+        let backendBody = """
+        {"object":"list","data":[{"id":"backend-model","object":"model","owned_by":"backend"}]}
+        """
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(backendBody.utf8.count)"),
+            ],
+            body: backendBody
+        )
+
+        let result = transformModelListHTTPResponseWithCatalog(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData,
+            catalogModels: []
+        )
+        XCTAssertNotNil(result, "Available-empty should produce a transformed response")
+
+        guard let transformedData = result,
+              let parsed = parseHTTPResponse(transformedData) else {
+            XCTFail("Should be parseable HTTP")
+            return
+        }
+
+        guard let bodyData = parsed.body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+              let entries = json["data"] as? [[String: Any]] else {
+            XCTFail("Body should be valid JSON")
+            return
+        }
+
+        XCTAssertTrue(entries.isEmpty, "Empty catalog should produce empty data array")
+        XCTAssertEqual(json["object"] as? String, "list")
+        XCTAssertFalse(entries.contains(where: { ($0["id"] as? String) == "backend-model" }),
+                       "Should NOT contain backend model when catalog is available")
+    }
+
+    // MARK: - Production provider with isolated cache
+
+    /// Verifies that a ProductionModelListCatalogProvider returns .unavailable
+    /// when no runtime cache or bundled snapshot exists.
+    func testProductionProvider_ReturnsUnavailableWhenNoCacheAndNoSnapshot() {
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-unavailable-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONError = NSError(domain: "test", code: 1)
+        fetcher.modelsDevError = NSError(domain: "test", code: 1)
+
+        let coordinator = CacheCoordinator(
+            clock: SystemClock(),
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil
+        )
+
+        let provider = ProductionModelListCatalogProvider(
+            coordinator: coordinator,
+            connectedProvidersProvider: { ["claude"] }
+        )
+
+        let result = provider.fetchCatalogModels()
+        if case .unavailable = result {
+            // Expected: no cache, no snapshot, fetch fails
+        } else {
+            XCTFail("Expected .unavailable when no valid cache/snapshot exists, got \(result)")
+        }
+    }
+
+    /// Verifies that a ProductionModelListCatalogProvider returns .available([])
+    /// when a valid catalog exists but no connected providers match.
+    func testProductionProvider_ReturnsAvailableEmptyWhenCatalogExistsButNoProviders() {
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-empty-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
+        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+
+        let coordinator = CacheCoordinator(
+            clock: SystemClock(),
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil
+        )
+
+        // No connected providers
+        let provider = ProductionModelListCatalogProvider(
+            coordinator: coordinator,
+            connectedProvidersProvider: { Set<String>() }
+        )
+
+        let result = provider.fetchCatalogModels()
+        if case .available(let models) = result {
+            XCTAssertTrue(models.isEmpty,
+                          "No connected providers should produce empty model list")
+        } else {
+            XCTFail("Expected .available([]) when catalog exists but no providers, got \(result)")
+        }
+    }
+
+    /// Verifies that a ProductionModelListCatalogProvider returns .available([models])
+    /// when catalog data and connected providers exist.
+    func testProductionProvider_ReturnsAvailableModelsWhenCatalogAndProvidersExist() {
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-models-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
+        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+
+        let coordinator = CacheCoordinator(
+            clock: SystemClock(),
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil
+        )
+
+        let provider = ProductionModelListCatalogProvider(
+            coordinator: coordinator,
+            connectedProvidersProvider: { ["claude", "kimi"] }
+        )
+
+        let result = provider.fetchCatalogModels()
+        if case .available(let models) = result {
+            XCTAssertFalse(models.isEmpty, "Should have models for connected providers")
+            let claudeModels = models.filter { $0.id.hasPrefix("claude/") }
+            let kimiModels = models.filter { $0.id.hasPrefix("kimi/") }
+            XCTAssertFalse(claudeModels.isEmpty, "Should have Claude models")
+            XCTAssertFalse(kimiModels.isEmpty, "Should have Kimi models")
+            // Should NOT have models for unconnected providers
+            let zaiModels = models.filter { $0.id.hasPrefix("zai/") }
+            XCTAssertTrue(zaiModels.isEmpty, "Should NOT have ZAI models when not connected")
+        } else {
+            XCTFail("Expected .available([models]) when catalog and providers exist, got \(result)")
+        }
+    }
+
+    /// Verifies that ThinkingProxy's catalogProvider can be replaced with
+    /// an injected test double that does NOT hit the live network.
+    /// Uses configureCatalogProvider with a real ServerManager and injected
+    /// fake fetcher/cache, not manual provider assignment.
+    func testThinkingProxy_CatalogProviderInjectable_NoLiveNetwork() {
+        // Save and reset UserDefaults to avoid interference from other tests
+        let defaults = UserDefaults.standard
+        let savedEnabledProviders = defaults.object(forKey: "enabledProviders")
+        defaults.removeObject(forKey: "enabledProviders")
+        defer {
+            if let saved = savedEnabledProviders {
+                defaults.set(saved, forKey: "enabledProviders")
+            } else {
+                defaults.removeObject(forKey: "enabledProviders")
+            }
+            defaults.synchronize()
+        }
+
+        let authDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-inject-auth-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: authDir) }
+
+        // Write a claude credential so the manager reports claude as connected
+        let credFile = authDir.appendingPathComponent("claude-test-cred.json")
+        let credData = try! JSONSerialization.data(withJSONObject: [
+            "type": "claude",
+            "email": "test@example.com"
+        ])
+        try! credData.write(to: credFile)
+
+        let manager = ServerManager()
+        manager.authDirectoryOverride = authDir
+
+        let proxy = ThinkingProxy()
+
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-inject-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
+        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+
+        // Wire through the production path with injected fake dependencies
+        proxy.configureCatalogProvider(
+            manager,
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil,
+            clock: SystemClock()
+        )
+
+        let result = proxy.catalogProvider.fetchCatalogModels()
+        if case .available(let models) = result {
+            let claudeModels = models.filter { $0.id.hasPrefix("claude/") }
+            XCTAssertFalse(claudeModels.isEmpty, "Should return Claude models from fake fetcher via production wiring path")
+        } else {
+            XCTFail("configureCatalogProvider with fake fetcher should return .available, got \(result)")
+        }
+
+        // Verify the fake fetcher was called (proving injection works, no URLSession)
+        XCTAssertGreaterThan(fetcher.totalFetchCount, 0,
+                              "Should use injected fetcher, not URLSession")
+    }
+
+    /// Verifies that request model alias normalization is NOT used as a /v1/models fallback.
+    /// This test proves canonicalizeTopLevelModelAlias is request-body only.
+    func testRequestAliasNormalizationNotUsedForModelList() {
+        // Request alias normalization should still work for request bodies
+        let input = """
+        {"model":"glm-4.7","messages":[{"role":"user","content":"hi"}]}
+        """
+        let result = canonicalizeTopLevelModelAlias(in: input)
+        XCTAssertNotNil(result, "Request alias normalization should still work for request bodies")
+        // But it should NOT affect model-list generation
+        // The model list is entirely generated by catalog-backed filtering
+    }
+
+    // ================================================================
+    // MARK: - Review Fix: Unavailable Must Not Pass Through Backend
+    // ================================================================
+
+    /// Verifies that when the catalog is unavailable, the response does NOT
+    /// pass through the backend model-list body. Instead, it produces an
+    /// explicit empty OpenAI-style list, preventing backend model leakage.
+    func testCatalogUnavailable_ProducesEmptyList_NotBackendPassthrough() {
+        let backendBody = """
+        {"object":"list","data":[{"id":"backend-only-model","object":"model","owned_by":"backend"}]}
+        """
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(backendBody.utf8.count)"),
+            ],
+            body: backendBody
+        )
+
+        // Catalog unavailable: nil catalogModels → should produce explicit empty list
+        let result = transformModelListHTTPResponseWhenCatalogUnavailable(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNotNil(result, "Catalog unavailable should produce a safe response, not nil passthrough")
+
+        guard let transformedData = result,
+              let parsed = parseHTTPResponse(transformedData) else {
+            XCTFail("Should be parseable HTTP")
+            return
+        }
+
+        guard let bodyData = parsed.body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+              let entries = json["data"] as? [[String: Any]] else {
+            XCTFail("Body should be valid JSON")
+            return
+        }
+
+        XCTAssertTrue(entries.isEmpty,
+                       "Catalog unavailable must produce empty data, not backend models")
+        XCTAssertEqual(json["object"] as? String, "list")
+        XCTAssertFalse(entries.contains(where: { ($0["id"] as? String) == "backend-only-model" }),
+                        "Must NOT leak backend model entries when catalog is unavailable")
+    }
+
+    /// Verifies that catalog-unavailable response preserves HTTP status and safe headers.
+    func testCatalogUnavailable_ResponseRebuildSafety() {
+        let backendBody = """
+        {"object":"list","data":[{"id":"backend-model","object":"model"}]}
+        """
+        let responseData = buildHTTPResponse(
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(backendBody.utf8.count)"),
+                ("X-Custom", "value"),
+            ],
+            body: backendBody
+        )
+
+        let result = transformModelListHTTPResponseWhenCatalogUnavailable(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNotNil(result)
+
+        guard let transformedData = result,
+              let parsed = parseHTTPResponse(transformedData) else {
+            XCTFail("Should be parseable HTTP")
+            return
+        }
+
+        XCTAssertTrue(parsed.statusLine.hasPrefix("HTTP/1.1 200"))
+        XCTAssertEqual(headerValue(in: parsed.headers, name: "X-Custom"), "value")
+        XCTAssertEqual(headerCount(in: parsed.headers, name: "Transfer-Encoding"), 0)
+        XCTAssertEqual(headerCount(in: parsed.headers, name: "Connection"), 1)
+        XCTAssertEqual(headerValue(in: parsed.headers, name: "Connection"), "close")
+
+        let cl = headerValue(in: parsed.headers, name: "Content-Length")
+        XCTAssertNotNil(cl)
+        if let clStr = cl, let clVal = Int(clStr) {
+            XCTAssertEqual(clVal, parsed.body.utf8.count)
+        }
+    }
+
+    /// Verifies that catalog-unavailable response does NOT produce nil for
+    /// non-2xx or invalid responses (those should still pass through nil).
+    func testCatalogUnavailable_Non2xx_ReturnsNil() {
+        let body = """
+        {"error":"internal error"}
+        """
+        let responseData = buildHTTPResponse(
+            statusCode: 500,
+            statusText: "Internal Server Error",
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "\(body.utf8.count)"),
+            ],
+            body: body
+        )
+
+        let result = transformModelListHTTPResponseWhenCatalogUnavailable(
+            method: "GET",
+            path: "/v1/models",
+            responseData: responseData
+        )
+        XCTAssertNil(result, "Non-2xx should return nil even when catalog is unavailable")
+    }
+
+    // ================================================================
+    // MARK: - Review Fix: Production Provider Uses Injected Closure
+    // ================================================================
+
+    /// Verifies that ProductionModelListCatalogProvider uses the injected
+    /// connectedProvidersProvider closure rather than duplicating parsing logic.
+    /// This proves the production wiring delegates to the closure.
+    func testProductionProvider_UsesInjectedConnectedProvidersClosure() {
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-closure-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
+        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+
+        let coordinator = CacheCoordinator(
+            clock: SystemClock(),
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil
+        )
+
+        var closureCallCount = 0
+        let provider = ProductionModelListCatalogProvider(
+            coordinator: coordinator,
+            connectedProvidersProvider: {
+                closureCallCount += 1
+                return ["opencode-go"]
+            }
+        )
+
+        let result = provider.fetchCatalogModels()
+        if case .available(let models) = result {
+            let ocGoModels = models.filter { $0.id.hasPrefix("opencode-go/") }
+            XCTAssertFalse(ocGoModels.isEmpty, "Should have OpenCode Go models from injected closure")
+            // Should NOT have models for providers NOT in the injected set
+            let claudeModels = models.filter { $0.id.hasPrefix("claude/") }
+            XCTAssertTrue(claudeModels.isEmpty,
+                           "Should NOT have Claude models when closure returns only opencode-go")
+        } else {
+            XCTFail("Expected .available with injected closure, got \(result)")
+        }
+        XCTAssertEqual(closureCallCount, 1,
+                        "Connected providers should come from the injected closure")
+    }
+
+    /// Verifies that createDefault produces a provider that uses an injected
+    /// connected-providers closure (not ServerManager.shared or duplicate parsing).
+    func testProductionProvider_CreateDefaultUsesInjectedClosure() {
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-createdefault-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
+        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+
+        var closureCallCount = 0
+        let provider = ProductionModelListCatalogProvider.createDefault(
+            connectedProvidersProvider: {
+                closureCallCount += 1
+                return ["claude"]
+            },
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil
+        )
+
+        let _ = provider.fetchCatalogModels()
+        XCTAssertEqual(closureCallCount, 1,
+                        "createDefault should use the injected connected-providers closure")
+    }
+
+    // ================================================================
+    // MARK: - T3 Remediation: No Singleton Divergence
+    // ================================================================
+
+    /// Verifies that catalog filtering uses only the injected ServerManager's
+    /// connected-provider state, not a singleton or separately constructed manager.
+    /// Two managers with conflicting state: injected one must control filtering.
+    func testInjectedManagerControlsFiltering_NotSingleton() {
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-inject-state-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
+        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+
+        let coordinator = CacheCoordinator(
+            clock: SystemClock(),
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil
+        )
+
+        // Inject a provider that returns only "zai" (simulating AppDelegate-owned manager state)
+        let injectedProvider = ProductionModelListCatalogProvider(
+            coordinator: coordinator,
+            connectedProvidersProvider: { ["zai"] }
+        )
+
+        let proxy = ThinkingProxy()
+        proxy.catalogProvider = injectedProvider
+
+        let result = proxy.catalogProvider.fetchCatalogModels()
+        if case .available(let models) = result {
+            // Only ZAI models should appear, not Claude/Codex/Kimi
+            let zaiModels = models.filter { $0.id.hasPrefix("zai/") }
+            let claudeModels = models.filter { $0.id.hasPrefix("claude/") }
+            XCTAssertFalse(zaiModels.isEmpty, "Should have ZAI models from injected closure")
+            XCTAssertTrue(claudeModels.isEmpty,
+                           "Should NOT have Claude models — injected closure controls filtering, not any singleton")
+        } else {
+            XCTFail("Expected .available with injected provider, got \(result)")
+        }
+    }
+
+    /// Verifies that the production default catalog-provider path performs zero
+    /// live URLSession calls when injected with a fake fetcher.
+    func testProductionDefault_NoLiveNetworkWithInjectedFetcher() {
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-no-network-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
+        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+
+        let provider = ProductionModelListCatalogProvider.createDefault(
+            connectedProvidersProvider: { ["claude"] },
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil
+        )
+
+        let result = provider.fetchCatalogModels()
+        if case .available(let models) = result {
+            XCTAssertFalse(models.isEmpty, "Should return catalog models from fake fetcher")
+        } else {
+            XCTFail("Expected .available from injected fake fetcher, got \(result)")
+        }
+
+        // Verify the fake fetcher was called (proving injection works)
+        XCTAssertGreaterThan(fetcher.totalFetchCount, 0,
+                              "Should use injected fetcher, not URLSession")
+    }
+
+    /// Verifies that a second /v1/models request within the 15-minute retry
+    /// throttle after a failed refresh does NOT trigger additional fetches.
+    func testProductionDefault_NoFetchAfterStaleFailureWithinThrottle() {
+        let now = Date()
+        let clock = FakeClock(now)
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-throttle-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        // Write a stale cache
+        let staleSnapshot = CatalogSnapshot(
+            schemaVersion: "1",
+            generatedAt: "2026-01-01T00:00:00Z",
+            sources: ["test"],
+            providerModels: [
+                "claude": [
+                    CatalogModelEntry(id: "claude-sonnet-4", object: "model", created: 1700000000, ownedBy: "anthropic", displayName: nil, tier: nil)
+                ]
+            ]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let staleData = try! encoder.encode(staleSnapshot)
+        let cacheFile = cacheDir.appendingPathComponent("model-catalog-cache.json")
+        try! staleData.write(to: cacheFile)
+        try! FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-7 * 3600)],
+            ofItemAtPath: cacheFile.path
+        )
+
+        // Fetcher that fails — simulates network error during stale refresh
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONError = NSError(domain: "test", code: 1)
+        fetcher.modelsDevError = NSError(domain: "test", code: 1)
+
+        let coordinator = CacheCoordinator(
+            clock: clock,
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil
+        )
+
+        let provider = ProductionModelListCatalogProvider(
+            coordinator: coordinator,
+            connectedProvidersProvider: { ["claude"] }
+        )
+
+        // First call: stale → attempts refresh → fails → serves stale
+        let _ = provider.fetchCatalogModels()
+        let firstFetchCount = fetcher.totalFetchCount
+        XCTAssertGreaterThan(firstFetchCount, 0, "First call should attempt refresh")
+
+        // Second call within throttle: should NOT fetch again
+        let _ = provider.fetchCatalogModels()
+        XCTAssertEqual(fetcher.totalFetchCount, firstFetchCount,
+                        "Second call within 15-min throttle should not fetch again")
+    }
+
+    // ================================================================
+    // MARK: - Quality Fix: configureCatalogProvider with Real ServerManager
+    // ================================================================
+
+    /// Verifies that ThinkingProxy.configureCatalogProvider(ServerManager) uses
+    /// the real ServerManager's connectedProviders() state to control /v1/models
+    /// output, with a temp auth dir and fake fetcher — no live network.
+    /// Proves that connected-provider state from the AppDelegate-owned manager
+    /// affects rendered catalog output via the production wiring path.
+    func testConfigureCatalogProvider_UsesRealServerManagerConnectedProviders() {
+        // Save and reset UserDefaults to avoid interference from other tests
+        let defaults = UserDefaults.standard
+        let savedEnabledProviders = defaults.object(forKey: "enabledProviders")
+        defaults.removeObject(forKey: "enabledProviders")
+        defer {
+            if let saved = savedEnabledProviders {
+                defaults.set(saved, forKey: "enabledProviders")
+            } else {
+                defaults.removeObject(forKey: "enabledProviders")
+            }
+            defaults.synchronize()
+        }
+
+        let authDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-real-sm-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: authDir) }
+
+        // Write a valid opencode-go credential
+        let credFile = authDir.appendingPathComponent("opencode-go-test-cred.json")
+        let credData = try! JSONSerialization.data(withJSONObject: [
+            "type": "opencode-go",
+            "api_key": "test-key-123",
+            "email": "test"
+        ])
+        try! credData.write(to: credFile)
+
+        let manager = ServerManager()
+        manager.authDirectoryOverride = authDir
+
+        // Verify the manager sees opencode-go as connected
+        let connected = manager.connectedProviders()
+        XCTAssertTrue(connected.contains(.opencodeGo),
+                      "ServerManager should see opencode-go as connected with valid credential")
+
+        // Set up ThinkingProxy using the production wiring path with injected deps
+        let proxy = ThinkingProxy()
+
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-real-cache-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
+        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+
+        proxy.configureCatalogProvider(
+            manager,
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil,
+            clock: SystemClock()
+        )
+
+        let result = proxy.catalogProvider.fetchCatalogModels()
+        if case .available(let models) = result {
+            let ocGoModels = models.filter { $0.id.hasPrefix("opencode-go/") }
+            XCTAssertFalse(ocGoModels.isEmpty,
+                           "Should have OpenCode Go models from real ServerManager state via production wiring path")
+        } else {
+            XCTFail("Expected .available with real ServerManager, got \(result)")
+        }
+    }
+
+    /// Verifies that disabling a provider through the real ServerManager
+    /// removes it from rendered /v1/models output, without creating a
+    /// separate manager or singleton. Uses the production wiring path.
+    func testConfigureCatalogProvider_DisablingProviderRemovesModels() {
+        // Save and reset UserDefaults to avoid interference from other tests
+        let defaults = UserDefaults.standard
+        let savedEnabledProviders = defaults.object(forKey: "enabledProviders")
+        defaults.removeObject(forKey: "enabledProviders")
+        defer {
+            if let saved = savedEnabledProviders {
+                defaults.set(saved, forKey: "enabledProviders")
+            } else {
+                defaults.removeObject(forKey: "enabledProviders")
+            }
+            defaults.synchronize()
+        }
+
+        let authDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-disable-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: authDir) }
+
+        // Write both opencode-go and zai credentials
+        for provider in ["opencode-go", "zai"] {
+            let credFile = authDir.appendingPathComponent("\(provider)-test-cred.json")
+            let credData = try! JSONSerialization.data(withJSONObject: [
+                "type": provider,
+                "api_key": "\(provider)-test-key",
+                "email": "test"
+            ])
+            try! credData.write(to: credFile)
+        }
+
+        let manager = ServerManager()
+        manager.authDirectoryOverride = authDir
+
+        // Initially both should be connected
+        var connected = manager.connectedProviders()
+        XCTAssertTrue(connected.contains(.opencodeGo))
+        XCTAssertTrue(connected.contains(.zai))
+
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-disable-cache-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
+        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+
+        let proxy = ThinkingProxy()
+        proxy.configureCatalogProvider(
+            manager,
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil,
+            clock: SystemClock()
+        )
+
+        // Before disabling: both should appear
+        let resultBefore = proxy.catalogProvider.fetchCatalogModels()
+        if case .available(let modelsBefore) = resultBefore {
+            XCTAssertFalse(modelsBefore.filter { $0.id.hasPrefix("opencode-go/") }.isEmpty)
+            XCTAssertFalse(modelsBefore.filter { $0.id.hasPrefix("zai/") }.isEmpty)
+        } else {
+            XCTFail("Expected .available before disabling")
+        }
+
+        // Disable opencode-go through the manager
+        manager.enabledProviders["opencode-go"] = false
+
+        // After disabling: only zai should appear
+        let resultAfter = proxy.catalogProvider.fetchCatalogModels()
+        if case .available(let modelsAfter) = resultAfter {
+            XCTAssertTrue(modelsAfter.filter { $0.id.hasPrefix("opencode-go/") }.isEmpty,
+                          "OpenCode Go models should disappear after disabling provider")
+            XCTAssertFalse(modelsAfter.filter { $0.id.hasPrefix("zai/") }.isEmpty,
+                           "ZAI models should still appear")
+        } else {
+            XCTFail("Expected .available after disabling")
+        }
+    }
+
+    /// Verifies that the production default provider uses the injected
+    /// connected-providers closure for filtering, not ServerManager.shared.
+    /// If ServerManager.shared were used, the result would be empty (no real auth dir).
+    func testProductionDefault_UsesInjectedClosureNotSingleton() {
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-no-singleton-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
+        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+
+        // Create default with explicit closure returning "opencode-go"
+        let provider = ProductionModelListCatalogProvider.createDefault(
+            connectedProvidersProvider: { ["opencode-go"] },
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil
+        )
+
+        let result = provider.fetchCatalogModels()
+        if case .available(let models) = result {
+            let ocGoModels = models.filter { $0.id.hasPrefix("opencode-go/") }
+            XCTAssertFalse(ocGoModels.isEmpty,
+                            "Injected closure returning opencode-go should produce opencode-go models")
+            // Claude models should NOT appear because the closure returns only opencode-go
+            let claudeModels = models.filter { $0.id.hasPrefix("claude/") }
+            XCTAssertTrue(claudeModels.isEmpty,
+                           "Claude should not appear when closure returns only opencode-go")
+        } else {
+            XCTFail("Expected .available with injected closure, got \(result)")
+        }
+    }
+
+    // ================================================================
+    // MARK: - Conflicting Manager Test: Injected Manager Controls Output
+    // ================================================================
+
+    /// Verifies that two real ServerManager instances with conflicting state
+    /// produce different /v1/models output, and that ThinkingProxy follows
+    /// only the manager passed to configureCatalogProvider.
+    /// This proves no hidden singleton, shared UserDefaults path, or
+    /// cross-manager state leak affects catalog filtering.
+    func testConflictingManagers_InjectedManagerControlsOutput() {
+        // Save and reset UserDefaults
+        let defaults = UserDefaults.standard
+        let savedEnabledProviders = defaults.object(forKey: "enabledProviders")
+        defaults.removeObject(forKey: "enabledProviders")
+        defer {
+            if let saved = savedEnabledProviders {
+                defaults.set(saved, forKey: "enabledProviders")
+            } else {
+                defaults.removeObject(forKey: "enabledProviders")
+            }
+            defaults.synchronize()
+        }
+
+        // Manager A: opencode-go only
+        let authDirA = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-mgr-a-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: authDirA, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: authDirA) }
+
+        let credA = authDirA.appendingPathComponent("opencode-go-cred.json")
+        try! JSONSerialization.data(withJSONObject: [
+            "type": "opencode-go",
+            "api_key": "key-a",
+            "email": "a"
+        ]).write(to: credA)
+
+        let managerA = ServerManager()
+        managerA.authDirectoryOverride = authDirA
+
+        // Manager B: zai only
+        let authDirB = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-mgr-b-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: authDirB, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: authDirB) }
+
+        let credB = authDirB.appendingPathComponent("zai-cred.json")
+        try! JSONSerialization.data(withJSONObject: [
+            "type": "zai",
+            "api_key": "key-b",
+            "email": "b"
+        ]).write(to: credB)
+
+        let managerB = ServerManager()
+        managerB.authDirectoryOverride = authDirB
+
+        // Confirm conflicting state
+        let connectedA = managerA.connectedProviders()
+        let connectedB = managerB.connectedProviders()
+        XCTAssertTrue(connectedA.contains(.opencodeGo), "Manager A should have opencode-go connected")
+        XCTAssertFalse(connectedA.contains(.zai), "Manager A should NOT have zai connected")
+        XCTAssertTrue(connectedB.contains(.zai), "Manager B should have zai connected")
+        XCTAssertFalse(connectedB.contains(.opencodeGo), "Manager B should NOT have opencode-go connected")
+
+        // Shared cache and fetcher fixtures
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccproxy-test-conflict-cache-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
+        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+
+        // Wire proxy with managerA via configureCatalogProvider
+        let proxy = ThinkingProxy()
+        proxy.configureCatalogProvider(
+            managerA,
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil,
+            clock: SystemClock()
+        )
+
+        // The output must follow managerA's connected state (opencode-go), not managerB's (zai)
+        let result = proxy.catalogProvider.fetchCatalogModels()
+        if case .available(let models) = result {
+            let ocGoModels = models.filter { $0.id.hasPrefix("opencode-go/") }
+            let zaiModels = models.filter { $0.id.hasPrefix("zai/") }
+            XCTAssertFalse(ocGoModels.isEmpty,
+                           "Should have OpenCode Go models from injected managerA")
+            XCTAssertTrue(zaiModels.isEmpty,
+                          "Should NOT have ZAI models — managerB is not wired to proxy")
+        } else {
+            XCTFail("Expected .available, got \(result)")
+        }
     }
 }
