@@ -89,7 +89,7 @@ echo "=== Test 1: All sources fail + valid existing snapshot => exit 0, preserve
 
 OUTPUT1="$TMPDIR/test1-snapshot.json"
 cat > "$OUTPUT1" << 'SNAPSHOTEOT'
-{"generatedAt":"2026-01-01T00:00:00Z","providerModels":{"claude":[{"created":1,"displayName":null,"id":"claude-sonnet-4","object":"model","ownedBy":"anthropic","supplementalMetadata":{},"tier":null}]},"schemaVersion":"1","sources":["models.json","models.dev"]}
+{"generatedAt":"2026-01-01T00:00:00Z","providerModels":{"claude":[{"created":1,"displayName":null,"id":"claude-sonnet-4","object":"model","ownedBy":"anthropic","supplementalMetadata":{},"tier":null}]},"schemaVersion":"2","sources":["models.json","models.dev"]}
 SNAPSHOTEOT
 
 EXISTING_HASH=$(shasum "$OUTPUT1" | awk '{print $1}')
@@ -143,7 +143,7 @@ echo "=== Test 3: All sources fail + empty-providerModels snapshot => exit non-z
 
 OUTPUT3="$TMPDIR/test3-snapshot.json"
 cat > "$OUTPUT3" << 'SNAPSHOTEOT'
-{"generatedAt":"2026-01-01T00:00:00Z","providerModels":{},"schemaVersion":"1","sources":["models.json","models.dev"]}
+{"generatedAt":"2026-01-01T00:00:00Z","providerModels":{},"schemaVersion":"2","sources":["models.json","models.dev"]}
 SNAPSHOTEOT
 
 set +e
@@ -168,7 +168,7 @@ echo "=== Test 4: All sources fail + unknown-sources snapshot => exit non-zero =
 
 OUTPUT4="$TMPDIR/test4-snapshot.json"
 cat > "$OUTPUT4" << 'SNAPSHOTEOT'
-{"generatedAt":"2026-01-01T00:00:00Z","providerModels":{"claude":[{"created":1,"displayName":null,"id":"claude-sonnet-4","object":"model","ownedBy":"anthropic","supplementalMetadata":{},"tier":null}]},"schemaVersion":"1","sources":["unknown-source"]}
+{"generatedAt":"2026-01-01T00:00:00Z","providerModels":{"claude":[{"created":1,"displayName":null,"id":"claude-sonnet-4","object":"model","ownedBy":"anthropic","supplementalMetadata":{},"tier":null}]},"schemaVersion":"2","sources":["unknown-source"]}
 SNAPSHOTEOT
 
 set +e
@@ -375,7 +375,7 @@ cat > "$OUTPUT9" << 'SNAPSHOTEOT'
             {"object": "model", "ownedBy": "anthropic", "supplementalMetadata": {}}
         ]
     },
-    "schemaVersion": "1",
+    "schemaVersion": "2",
     "sources": ["models.json", "models.dev"]
 }
 SNAPSHOTEOT
@@ -407,7 +407,7 @@ cat > "$OUTPUT10" << 'SNAPSHOTEOT'
     "providerModels": {
         "claude": []
     },
-    "schemaVersion": "1",
+    "schemaVersion": "2",
     "sources": ["models.json", "models.dev"]
 }
 SNAPSHOTEOT
@@ -487,7 +487,7 @@ cat > "$OUTPUT12" << 'SNAPSHOTEOT'
             {"id": "claude-sonnet-4", "object": "model", "created": "not-an-int", "ownedBy": "anthropic", "supplementalMetadata": {}}
         ]
     },
-    "schemaVersion": "1",
+    "schemaVersion": "2",
     "sources": ["models.json", "models.dev"]
 }
 SNAPSHOTEOT
@@ -522,7 +522,7 @@ cat > "$OUTPUT13" << 'SNAPSHOTEOT'
         ],
         "codex": []
     },
-    "schemaVersion": "1",
+    "schemaVersion": "2",
     "sources": ["models.json", "models.dev"]
 }
 SNAPSHOTEOT
@@ -559,7 +559,7 @@ cat > "$OUTPUT14" << 'SNAPSHOTEOT'
             {"id": "", "object": "model", "created": 1, "ownedBy": "openai", "supplementalMetadata": {}, "tier": null}
         ]
     },
-    "schemaVersion": "1",
+    "schemaVersion": "2",
     "sources": ["models.json", "models.dev"]
 }
 SNAPSHOTEOT
@@ -577,6 +577,43 @@ if [ $EXIT_CODE -ne 0 ]; then
     pass "Test 14: script exited non-zero ($EXIT_CODE) with one valid provider and one provider with empty model ID"
 else
     fail "Test 14: script exited 0 with mixed valid/empty-ID providers (expected non-zero)"
+fi
+
+# ---- Test 15: All sources fail + old-schema "1" existing snapshot => exit non-zero ----
+
+echo ""
+echo "=== Test 15: All sources fail + old-schema \"1\" snapshot => exit non-zero ==="
+
+OUTPUT15="$TMPDIR/test15-snapshot.json"
+cat > "$OUTPUT15" << 'SNAPSHOTEOT'
+{
+    "generatedAt": "2026-01-01T00:00:00Z",
+    "providerModels": {
+        "claude": [
+            {"id": "claude-sonnet-4", "object": "model", "created": 1, "ownedBy": "anthropic", "supplementalMetadata": {}, "tier": null}
+        ],
+        "codex": [
+            {"id": "gpt-4o", "object": "model", "created": 2, "ownedBy": "openai", "supplementalMetadata": {}, "tier": null}
+        ]
+    },
+    "schemaVersion": "1",
+    "sources": ["models.json", "codex_client_models.json", "models.dev"]
+}
+SNAPSHOTEOT
+
+set +e
+MODEL_CATALOG_OUTPUT_PATH="$OUTPUT15" \
+MODEL_CATALOG_MODELS_JSON_URL="$INVALID_URL" \
+MODEL_CATALOG_CODEX_CLIENT_URL="$INVALID_URL" \
+MODEL_CATALOG_MODELS_DEV_URL="$INVALID_URL" \
+swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+
+if [ $EXIT_CODE -ne 0 ]; then
+    pass "Test 15: script exited non-zero ($EXIT_CODE) with old-schema '1' snapshot (schema mismatch rejected)"
+else
+    fail "Test 15: script exited 0 with old-schema '1' snapshot (expected non-zero — old schema must be rejected)"
 fi
 
 # ---- Summary ----

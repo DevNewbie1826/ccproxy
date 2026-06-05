@@ -16,10 +16,10 @@ let snapshotOutputPath = env["MODEL_CATALOG_OUTPUT_PATH"]
     ?? "src/Sources/Resources/model-catalog-snapshot.json"
 
 let modelsJSONURL = URL(string: env["MODEL_CATALOG_MODELS_JSON_URL"]
-    ?? "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/models.json")!
+    ?? "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/5753d1a0896fd5bb9ace47adb17b0174ceb79e4d/internal/registry/models/models.json")!
 
 let codexClientURL = URL(string: env["MODEL_CATALOG_CODEX_CLIENT_URL"]
-    ?? "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/codex_client_models.json")!
+    ?? "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/5753d1a0896fd5bb9ace47adb17b0174ceb79e4d/internal/registry/models/codex_client_models.json")!
 
 let modelsDevURL = URL(string: env["MODEL_CATALOG_MODELS_DEV_URL"]
     ?? "https://models.dev/api.json")!
@@ -32,14 +32,11 @@ let primaryProviderMapping: [String: String] = [
     "codex-free": "codex",
     "codex-team": "codex",
     "codex-plus": "codex",
-    "codex-pro": "codex",
-    "kimi": "kimi"
+    "codex-pro": "codex"
 ]
 
 // CCProxy provider ID → models.dev provider key
 let secondaryProviderMapping: [String: String] = [
-    "claude": "anthropic",
-    "codex": "openai",
     "zai": "zai-coding-plan",
     "minimax": "minimax-coding-plan",
     "kimi": "moonshotai",
@@ -417,6 +414,12 @@ func isValidExistingSnapshot(_ url: URL) -> Bool {
         return false
     }
 
+    // Schema version must match the current policy version.
+    // Old-schema snapshots are not valid fallbacks and must be regenerated.
+    guard snapshot.schemaVersion == "2" else {
+        return false
+    }
+
     // Sources must reference at least one known external catalog
     let knownSources: Set<String> = ["models.json", "codex_client_models.json", "models.dev"]
     guard !snapshot.sources.isEmpty,
@@ -517,7 +520,7 @@ encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
 
 // Encode new providerModels via Codable for deterministic comparison
 let newSnapshot = CatalogSnapshot(
-    schemaVersion: "1",
+    schemaVersion: "2",
     generatedAt: "",
     sources: sources.isEmpty ? ["unknown"] : sources,
     providerModels: merged
@@ -554,7 +557,7 @@ if contentUnchanged, let existing = existingGeneratedAt {
 }
 
 let snapshot = CatalogSnapshot(
-    schemaVersion: "1",
+    schemaVersion: "2",
     generatedAt: finalGeneratedAt,
     sources: sources.isEmpty ? ["unknown"] : sources,
     providerModels: merged
