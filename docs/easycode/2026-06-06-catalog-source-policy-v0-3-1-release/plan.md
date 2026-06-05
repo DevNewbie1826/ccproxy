@@ -20,6 +20,16 @@
 - Degraded-baseline caveat: none
 - CodeGraph note: CodeGraph exploration for `ExternalModelCatalog model catalog mappings snapshot generator tests Makefile sparkle archive appcast` warned that the available index was from the root worktree, so exact file evidence was verified through direct reads in the isolated worktree.
 
+## Execute Resume Context
+
+- This plan revision resumes mid-execute after a Task 2A review failure; it is not a pristine pre-execute plan.
+- Tasks 0, 1, and 2 are completed checkpoints and already received task-level `code-spec-reviewer` PASS and `code-quality-reviewer` PASS. Their RED/GREEN commands below are retained as historical execution evidence and review context, not as commands to rerun against the current dirty worktree.
+- The previous Task 2A attempt observed RED for stale schema `"1"` snapshot acceptance, then failed review because schema validation, generator schema/mapping updates, bundled snapshot regeneration, and affected fixture updates were not completed as one atomic consistent unit.
+- The current worktree may already contain approved completed diffs from Tasks 0-2 plus in-progress Task 2A remediation diffs, including URL pins, source-policy tests/mappings, production schema `"2"` validation, and partial schema `"2"` fixture changes.
+- The executor must not try to rerun Tasks 0-2 from a pristine baseline, must not restore or revert their approved changes, and must not treat their historical RED expectations as current expected failures.
+- Remaining execution resumes at Task 2A remediation and atomic completion. Task 2A must complete fixture migration, generator mapping/schema updates, bundled snapshot regeneration, and validation as one review unit before requesting task-level review.
+- No separate state, ledger, or progress artifact records this context; this section is the sole workflow progress context for the resume.
+
 ## Scope Lock
 
 - Enforce provider source policy only for current CCProxy providers: `claude`, `codex`, `zai`, `minimax`, `kimi`, and `opencode-go`.
@@ -51,6 +61,8 @@ Modify tests:
   - Add guard tests proving source and generator text mappings remain in sync enough to catch future drift.
   - Add cache validation tests proving stale old-policy runtime snapshots are rejected and fresh policy-version snapshots remain valid.
 - `src/Tests/CCProxyTests/ServerManagerConfigTests.swift`
+  - Update any current-valid bundled/runtime snapshot fixture, helper, or assertion affected by the schema bump from `"1"` to `"2"`.
+- `src/Tests/CCProxyTests/ThinkingProxyModelAliasTests.swift`
   - Update any current-valid bundled/runtime snapshot fixture, helper, or assertion affected by the schema bump from `"1"` to `"2"`.
 - Any other current repository test fixture/helper discovered during execution that intentionally models a valid runtime or bundled catalog snapshot
   - Update current-valid schema values to `"2"`; keep schema `"1"` only for explicit stale old-policy invalidation/fallback fixtures.
@@ -84,7 +96,13 @@ Generated but not committed:
   ```bash
   git status --short
   ```
-  Expected output is either clean or only approved workflow artifact changes already present. Stop if `.gitignore`, Sparkle key files, `CCProxy.app`, or `CCProxy.app.zip` are staged.
+  Expected output may include approved completed Tasks 0-2 diffs and in-progress Task 2A remediation diffs only. Stop if `.gitignore`, Sparkle key files, `CCProxy.app`, or `CCProxy.app.zip` are staged.
+
+- [ ] Validate that current implementation diffs are explained by completed Tasks 0-2 or in-progress Task 2A remediation before editing anything else:
+  ```bash
+  git diff --name-only
+  ```
+  Expected output is limited to `docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/plan.md`, `src/Sources/ExternalModelCatalog.swift`, `scripts/generate-model-catalog-snapshot.swift`, `scripts/test-snapshot-generator.sh`, `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift`, `src/Tests/CCProxyTests/ServerManagerConfigTests.swift`, `src/Tests/CCProxyTests/ThinkingProxyModelAliasTests.swift`, `src/Sources/Resources/model-catalog-snapshot.json`, and any other current-valid snapshot fixture/helper explicitly needed for Task 2A schema `"2"` remediation. Stop if any other implementation file is modified unless executor evidence can tie it directly to completed Tasks 0-2 or Task 2A remediation under the approved spec.
 
 - [ ] Verify release/tag absence before release work proceeds:
   ```bash
@@ -112,11 +130,13 @@ Generated but not committed:
 
 ## Pre-Execute Gate
 
-- [ ] Do not begin Task 0 or any implementation work until the EasyCode plan stage is complete: `plan-checker` returned PASS, `plan-challenger` returned PASS, and user approval or unattended-mode plan approval accepted this exact plan revision.
+- [ ] Do not resume Task 2A remediation or any implementation work until the EasyCode plan stage is complete: `plan-checker` returned PASS, `plan-challenger` returned PASS, and user approval or unattended-mode plan approval accepted this exact plan revision.
 - [ ] Before that plan-stage gate is complete, do not edit implementation files, run implementation TDD cycles, create implementation commits, push branches, create PRs, perform release build/signing work, publish releases, merge PRs, update local `main`, or run finish cleanup commands.
-- [ ] If this plan changes after reviewer PASS, return to the plan reviewer gates and obtain approval for the revised artifact before executing Task 0.
+- [ ] If this plan changes after reviewer PASS, return to the plan reviewer gates and obtain approval for the revised artifact before resuming Task 2A.
 
-## Task 0: Pin CLIProxyAPI Catalog Source URLs RED And GREEN
+## Task 0: Completed Checkpoint - Pin CLIProxyAPI Catalog Source URLs RED And GREEN
+
+Status: completed and reviewed PASS before this resume revision. The steps in this section are historical evidence for completed Task 0; do not rerun the RED command expecting failure in the current dirty worktree, and do not revert approved Task 0 URL pin changes.
 
 - [ ] Edit only `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift`.
 - [ ] Add failing source URL policy tests with these exact behaviors:
@@ -154,7 +174,9 @@ Generated but not committed:
   ```
   Expected output: `CLIProxyAPI source pins verified`.
 
-## Task 1: Catalog Source Policy Tests RED
+## Task 1: Completed Checkpoint - Catalog Source Policy Tests RED
+
+Status: completed and reviewed PASS before this resume revision. The steps in this section are historical evidence for completed Task 1; do not rerun the RED command expecting failure in the current dirty worktree, and do not revert approved Task 1 policy tests.
 
 - [ ] Edit only `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift`.
 - [ ] Add failing policy guard tests with these exact behaviors:
@@ -177,7 +199,9 @@ Generated but not committed:
   ```
   Expected output: only test changes are present; no production/source mapping changes are in the diff.
 
-## Task 2: Production Mapping GREEN
+## Task 2: Completed Checkpoint - Production Mapping GREEN
+
+Status: completed and reviewed PASS before this resume revision. The steps in this section are historical evidence for completed Task 2; do not restore old production mappings or rerun this section as if production mapping changes were absent.
 
 - [ ] Edit only `src/Sources/ExternalModelCatalog.swift` and any still-failing assertions in `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift` that encode the old policy.
 - [ ] In `ExternalModelCatalog.primaryProviderMapping`, keep only:
@@ -214,73 +238,59 @@ Generated but not committed:
   ```
   Expected output: mapping changes and policy tests only; no `grok` or `xai` additions; no credential or request-path changes.
 
-## Task 2A: Runtime Cache Policy Validation RED And GREEN
+## Task 2A: Atomic Schema, Generator, Snapshot, And Cache Policy RED/GREEN
 
-This task prevents existing runtime cache snapshots, including user caches such as `~/.cli-proxy-api/model-catalog-cache.json`, from surviving the source-policy update when they were generated under the old policy.
+This is one atomic executor assignment and one review unit. It prevents existing runtime cache snapshots, including user caches such as `~/.cli-proxy-api/model-catalog-cache.json`, from surviving the source-policy update when they were generated under the old policy. Do not request `code-spec-reviewer` or `code-quality-reviewer` PASS for this task until production schema validation, generator schema/mapping updates, regenerated bundled snapshot, and all affected current-valid fixtures are consistent.
 
-- [ ] Edit only `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift` for RED.
-- [ ] Add cache invalidation tests with these exact behaviors:
+- [ ] Allowed files for this atomic task are exactly `src/Sources/ExternalModelCatalog.swift`, `scripts/generate-model-catalog-snapshot.swift`, `src/Sources/Resources/model-catalog-snapshot.json`, `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift`, `src/Tests/CCProxyTests/ServerManagerConfigTests.swift`, `src/Tests/CCProxyTests/ThinkingProxyModelAliasTests.swift`, `scripts/test-snapshot-generator.sh`, and any other current-valid snapshot fixture/helper discovered during execution. Do not include unrelated source changes.
+
+- [ ] Inspect current resume diff before further Task 2A edits:
+  ```bash
+  git status --short && git diff --name-only && git diff -- src/Sources/ExternalModelCatalog.swift scripts/generate-model-catalog-snapshot.swift scripts/test-snapshot-generator.sh src/Tests/CCProxyTests/ExternalModelCatalogTests.swift src/Tests/CCProxyTests/ServerManagerConfigTests.swift src/Tests/CCProxyTests/ThinkingProxyModelAliasTests.swift src/Sources/Resources/model-catalog-snapshot.json
+  ```
+  Expected output: diffs are limited to approved completed Tasks 0-2 and in-progress Task 2A remediation. Stop if unrelated implementation files appear, if app/release artifacts are staged, or if the generator mapping/schema has already been changed without recorded generator RED evidence; do not revert approved completed work to recreate a pristine baseline.
+
+- [ ] Treat the previous Task 2A cache-schema RED as already observed if executor evidence records the focused stale-schema command failing before production schema validation changed. Do not revert production schema validation or fixtures to recreate that RED.
+- [ ] If the previous cache-schema RED evidence is not available and production schema validation has not yet been changed, add or verify the cache invalidation tests below and run the focused RED command. If production schema validation has already changed and no RED evidence exists, stop and report the evidence gap rather than reverting code.
+- [ ] Cache invalidation tests must have these exact behaviors:
   - `testRuntimeCache_oldPolicySchemaRejected_fallsBackToBundled` writes a fresh runtime `model-catalog-cache.json` with `schemaVersion: "1"`, sources including `models.dev`, and old-policy OAuth models including `codex/gpt-4o-mini`; writes a valid bundled snapshot using the new policy schema and no models.dev-only OAuth models; configures fetcher errors; expects `CacheCoordinator.getCatalog()` to serve the bundled snapshot, not the runtime cache.
   - `testRuntimeCache_oldPolicySchemaRejected_refreshesWhenPossible` writes the same stale runtime cache, configures fetcher fixture data, calls `getCatalog()`, and expects a refreshed snapshot with no `codex/gpt-4o-mini` plus compatible providers from models.dev.
   - `testSnapshotValidation_acceptsCurrentPolicySchema` builds a snapshot with the new policy schema version, valid sources, and provider models, and expects `ExternalModelCatalog.isValidSnapshot` to return true.
   - `testSnapshotValidation_rejectsOldPolicySchema` builds a snapshot with `schemaVersion: "1"` and otherwise valid-looking old-policy provider models, and expects `ExternalModelCatalog.isValidSnapshot` to return false.
-- [ ] Update test fixture helpers and current-valid test snapshots from `schemaVersion: "1"` to `schemaVersion: "2"` wherever they represent valid current-policy bundled/runtime/refreshed snapshots. This explicitly includes `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift`, `src/Tests/CCProxyTests/ServerManagerConfigTests.swift`, `scripts/test-snapshot-generator.sh`, and any other current repository test fixture/helper discovered during execution that intentionally models a valid runtime or bundled catalog snapshot. Keep only intentionally stale old-policy fixtures at `schemaVersion: "1"` for invalidation/fallback tests.
-- [ ] Run RED before production cache changes:
+- [ ] Update test fixture helpers and current-valid test snapshots from `schemaVersion: "1"` to `schemaVersion: "2"` wherever they represent valid current-policy bundled/runtime/refreshed snapshots. This explicitly includes `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift`, `src/Tests/CCProxyTests/ServerManagerConfigTests.swift`, `src/Tests/CCProxyTests/ThinkingProxyModelAliasTests.swift`, `scripts/test-snapshot-generator.sh`, and any other current repository test fixture/helper discovered during execution that intentionally models a valid runtime or bundled catalog snapshot. Fixture rule: every fixture intended to exercise non-schema validation must use schema `"2"`; schema `"1"` is allowed only for tests explicitly asserting old-policy schema invalidation/fallback.
+- [ ] Run cache-schema RED only if the previous RED evidence is missing and production schema validation has not yet been changed:
   ```bash
   cd src && swift test --filter 'ExternalModelCatalogTests.testRuntimeCache_oldPolicySchemaRejected_fallsBackToBundled|ExternalModelCatalogTests.testRuntimeCache_oldPolicySchemaRejected_refreshesWhenPossible|ExternalModelCatalogTests.testSnapshotValidation_rejectsOldPolicySchema'
   ```
   Expected failure mode: stale `schemaVersion: "1"` snapshots are still accepted by current validation, so old-policy runtime cache content can be served.
 
-- [ ] Edit `src/Sources/ExternalModelCatalog.swift` and all affected current-valid fixtures/helpers/assertions in `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift`, `src/Tests/CCProxyTests/ServerManagerConfigTests.swift`, `scripts/test-snapshot-generator.sh`, and any other discovered current-valid snapshot fixture/helper.
+- [ ] Complete or verify `src/Sources/ExternalModelCatalog.swift` and all affected current-valid fixtures/helpers/assertions in `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift`, `src/Tests/CCProxyTests/ServerManagerConfigTests.swift`, `src/Tests/CCProxyTests/ThinkingProxyModelAliasTests.swift`, `scripts/test-snapshot-generator.sh`, and any other discovered current-valid snapshot fixture/helper.
 - [ ] Add a single production policy schema constant `static let currentSchemaVersion = "2"` inside `ExternalModelCatalog`.
 - [ ] Update `ExternalModelCatalog.isValidSnapshot(_:)` to require `snapshot.schemaVersion == currentSchemaVersion`. Keep existing non-empty source/provider/model-ID validation.
 - [ ] Update `ExternalModelCatalog.mergeCatalogs(...)` snapshot creation to emit `schemaVersion: ExternalModelCatalog.currentSchemaVersion` so refreshed runtime caches and in-memory snapshots are valid after the policy change.
-- [ ] Ensure all current-valid cache/bundled snapshot tests and script fixtures now use schema `"2"`; stale old-policy cache invalidation/fallback tests must be the only tests that keep schema `"1"`.
+- [ ] Ensure all current-valid cache/bundled snapshot tests and script fixtures now use schema `"2"`; stale old-policy cache invalidation/fallback tests must be the only tests that keep schema `"1"`. Structural invalid fixtures that test non-schema validation must also use schema `"2"` so they continue exercising their intended structural failure instead of failing early on schema.
 - [ ] Do not add per-user cache deletion, migration files, persistent workflow state, or runtime hooks. Validation-based invalidation is sufficient: stale caches are ignored and refresh/bundled fallback paths already exist.
-- [ ] Run GREEN:
+- [ ] Continue within this same atomic task to update generator mappings/schema and regenerate the bundled snapshot before any review is requested. The atomic task cannot be marked complete until all following substeps pass.
+
+### Task 2A Substep: Generator Policy And Schema RED/GREEN
+
+- [ ] Before adding the generator guard or editing generator mapping/schema, inspect the current generator diff:
   ```bash
-  cd src && swift test --filter 'ExternalModelCatalogTests|ServerManagerConfigTests' && cd .. && scripts/test-snapshot-generator.sh
+  git diff -- scripts/generate-model-catalog-snapshot.swift
   ```
-  Expected output: all `ExternalModelCatalogTests` and `ServerManagerConfigTests` pass with zero failures, including the new stale-runtime-cache tests, and `scripts/test-snapshot-generator.sh` passes after schema fixture updates.
-
-- [ ] Inspect cache validation diff:
-  ```bash
-  git diff -- src/Sources/ExternalModelCatalog.swift src/Tests/CCProxyTests/ExternalModelCatalogTests.swift src/Tests/CCProxyTests/ServerManagerConfigTests.swift scripts/test-snapshot-generator.sh
-  ```
-  Expected output: cache policy validation is implemented through schema-version validation; all current-valid schema fixtures/helpers/assertions are updated to `"2"`; only explicit stale old-policy invalidation/fallback fixtures remain at `"1"`; no user cache files are created, deleted, or committed.
-
-## Task 3: Snapshot Generator Policy Tests RED And GREEN
-
-- [ ] Edit only `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift` for RED if generator mapping drift is not yet covered.
-- [ ] Add a generator text guard test that reuses the Task 0 helper-derived repository-root path for `scripts/generate-model-catalog-snapshot.swift` and verifies the generator mapping source does not contain `"claude": "anthropic"`, `"codex": "openai"`, or `"kimi": "kimi"`, and does contain `"kimi": "moonshotai"`, `"zai": "zai-coding-plan"`, `"minimax": "minimax-coding-plan"`, and `"opencode-go": "opencode-go"`.
-- [ ] Run RED before editing the generator:
+  Expected output may include Task 0 approved URL pin changes. Stop if mapping or schema changes are already present and no generator mapping/schema RED evidence was recorded; do not revert generator changes to manufacture RED.
+- [ ] Add or update the generator mapping/schema guard test that reuses the Task 0 helper-derived repository-root path for `scripts/generate-model-catalog-snapshot.swift` and verifies the generator mapping source does not contain `"claude": "anthropic"`, `"codex": "openai"`, or `"kimi": "kimi"`, does contain `"kimi": "moonshotai"`, `"zai": "zai-coding-plan"`, `"minimax": "minimax-coding-plan"`, and `"opencode-go": "opencode-go"`, and emits current policy schema `schemaVersion: "2"` instead of old schema `schemaVersion: "1"`.
+- [ ] Run RED before any mapping/schema edit to `scripts/generate-model-catalog-snapshot.swift` if generator mapping/schema RED evidence has not already been recorded:
   ```bash
   cd src && swift test --filter ExternalModelCatalogTests.testProviderSourcePolicy_snapshotGeneratorMappingsMatchProductionPolicy
   ```
-  Expected failure mode: the generator still contains old mapping literals for OAuth secondary mapping and primary `kimi`.
-
-- [ ] Edit only `scripts/generate-model-catalog-snapshot.swift`.
+  Expected failure mode: the newly added generator mapping/schema guard fails against the pre-generator-change state because the generator still contains old mapping literals for OAuth secondary mapping or primary `kimi`, still emits old schema `"1"`, or both. Stop if this test passes before generator edits; reassess whether the guard exercises the intended generator drift.
+- [ ] Edit `scripts/generate-model-catalog-snapshot.swift` within this same atomic task only after the generator guard RED has been observed or previously recorded in executor evidence.
 - [ ] Apply the same mapping change as production: remove primary `kimi`; remove secondary `claude` and `codex`; keep secondary `zai`, `minimax`, `kimi`, and `opencode-go`.
 - [ ] Update generator snapshot creation to emit the same current policy schema version required by `ExternalModelCatalog.isValidSnapshot`: `schemaVersion: "2"`.
-- [ ] Run GREEN:
-  ```bash
-  cd src && swift test --filter ExternalModelCatalogTests
-  ```
-  Expected output: all `ExternalModelCatalogTests` pass with zero failures.
+- [ ] Update `scripts/test-snapshot-generator.sh` expectations and fixtures so current-valid generated snapshots use schema `"2"`, required `sources` includes `models.json`, `codex_client_models.json`, and `models.dev`, and stale schema `"1"` appears only in explicit invalidation/fallback test contexts.
 
-- [ ] Run snapshot generator unit script:
-  ```bash
-  scripts/test-snapshot-generator.sh
-  ```
-  Expected output includes `Snapshot generator tests passed` or equivalent success lines and exits 0.
-
-- [ ] Inspect generator diff:
-  ```bash
-  git diff -- scripts/generate-model-catalog-snapshot.swift src/Tests/CCProxyTests/ExternalModelCatalogTests.swift
-  ```
-  Expected output: generator mappings match production policy and tests lock policy.
-
-## Task 4: Regenerate Bundled Snapshot And Verify Catalog Data
+### Task 2A Substep: Regenerate Bundled Snapshot And Verify Data
 
 - [ ] Verify both approved pinned CLIProxyAPI raw source URLs fetch and parse before snapshot generation:
   ```bash
@@ -338,19 +348,27 @@ This task prevents existing runtime cache snapshots, including user caches such 
   ```
   Expected output: `snapshot policy verified`. Stop if snapshot `sources` omits `models.json`, `codex_client_models.json`, or `models.dev`; the release must not pass if the Codex supplemental source silently drops.
 
-- [ ] Run focused verification:
+- [ ] Verify tests cover that the actual tracked bundled snapshot is accepted by `ExternalModelCatalog.isValidSnapshot`:
   ```bash
-  cd src && swift test --filter 'ExternalModelCatalogTests|ServerManagerConfigTests' && cd .. && scripts/test-snapshot-generator.sh
+  cd src && swift test --filter 'ExternalModelCatalogTests|ServerManagerConfigTests|ThinkingProxyModelAliasTests'
   ```
-  Expected output: all focused Swift tests pass, including schema-sensitive catalog and server-manager config fixtures, and snapshot generator script passes.
+  Expected output: all focused Swift tests pass. The focused tests must include acceptance coverage for the actual bundled `src/Sources/Resources/model-catalog-snapshot.json` through `ExternalModelCatalog.isValidSnapshot`, plus affected ServerManager and ThinkingProxy fixtures.
 
-- [ ] Inspect diff:
+- [ ] Run atomic GREEN verification:
   ```bash
-  git diff -- src/Sources/Resources/model-catalog-snapshot.json
+  cd src && swift test --filter 'ExternalModelCatalogTests|ServerManagerConfigTests|ThinkingProxyModelAliasTests' && cd .. && scripts/test-snapshot-generator.sh
   ```
-  Expected output: deterministic snapshot update only; no generated app bundle or zip in git diff.
+  Expected output: all `ExternalModelCatalogTests`, `ServerManagerConfigTests`, and affected `ThinkingProxyModelAliasTests` pass with zero failures, including the new stale-runtime-cache tests and actual bundled snapshot acceptance coverage; `scripts/test-snapshot-generator.sh` passes after schema and source-policy updates.
 
-## Task 5: Full Pre-Release Verification Before Build Artifacts
+- [ ] Inspect cache validation diff:
+  ```bash
+  git diff -- src/Sources/ExternalModelCatalog.swift scripts/generate-model-catalog-snapshot.swift src/Sources/Resources/model-catalog-snapshot.json src/Tests/CCProxyTests/ExternalModelCatalogTests.swift src/Tests/CCProxyTests/ServerManagerConfigTests.swift src/Tests/CCProxyTests/ThinkingProxyModelAliasTests.swift scripts/test-snapshot-generator.sh
+  ```
+  Expected output: production `currentSchemaVersion = "2"` validation, generator schema/mapping updates, tracked bundled snapshot regeneration to schema `"2"`, affected fixtures, and test script updates are all present together. The actual bundled snapshot must be accepted by `ExternalModelCatalog.isValidSnapshot` via tests. Only explicit stale old-policy invalidation/fallback fixtures remain at schema `"1"`; no user cache files are created, deleted, or committed.
+
+- [ ] Atomic review gate: request `code-spec-reviewer` and `code-quality-reviewer` only after every Task 2A substep above is complete and the full atomic GREEN verification passes. Reviewers must evaluate schema validation, generator mappings/schema, regenerated bundled snapshot, and affected fixtures as one consistent unit.
+
+## Task 3: Full Pre-Release Verification Before Build Artifacts
 
 - [ ] Run repository verification from the baseline command:
   ```bash
@@ -362,9 +380,9 @@ This task prevents existing runtime cache snapshots, including user caches such 
   ```bash
   git status --short
   ```
-  Expected output: modified files are limited to `appcast.xml` only after release metadata task, `src/Sources/ExternalModelCatalog.swift`, `scripts/generate-model-catalog-snapshot.swift`, `scripts/test-snapshot-generator.sh`, `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift`, `src/Tests/CCProxyTests/ServerManagerConfigTests.swift`, any other discovered current-valid snapshot test fixture/helper that required schema `"2"`, and `src/Sources/Resources/model-catalog-snapshot.json`; `docs/easycode/.../plan.md` may also appear as the planning artifact. Stop if `.gitignore`, Sparkle key files, `CCProxy.app`, or `CCProxy.app.zip` are staged.
+  Expected output: modified files are limited to `appcast.xml` only after release metadata task, `src/Sources/ExternalModelCatalog.swift`, `scripts/generate-model-catalog-snapshot.swift`, `scripts/test-snapshot-generator.sh`, `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift`, `src/Tests/CCProxyTests/ServerManagerConfigTests.swift`, `src/Tests/CCProxyTests/ThinkingProxyModelAliasTests.swift`, any other discovered current-valid snapshot test fixture/helper that required schema `"2"`, and `src/Sources/Resources/model-catalog-snapshot.json`; `docs/easycode/.../plan.md` may also appear as the planning artifact. Stop if `.gitignore`, Sparkle key files, `CCProxy.app`, or `CCProxy.app.zip` are staged.
 
-## Task 6: Commit Catalog Policy Changes
+## Task 4: Commit Catalog Policy Changes
 
 - [ ] Confirm release files have not yet been changed for this commit:
   ```bash
@@ -374,7 +392,7 @@ This task prevents existing runtime cache snapshots, including user caches such 
 
 - [ ] Stage intended files only:
   ```bash
-  git add docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/plan.md src/Sources/ExternalModelCatalog.swift scripts/generate-model-catalog-snapshot.swift scripts/test-snapshot-generator.sh src/Tests/CCProxyTests/ExternalModelCatalogTests.swift src/Tests/CCProxyTests/ServerManagerConfigTests.swift src/Sources/Resources/model-catalog-snapshot.json
+  git add docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/plan.md src/Sources/ExternalModelCatalog.swift scripts/generate-model-catalog-snapshot.swift scripts/test-snapshot-generator.sh src/Tests/CCProxyTests/ExternalModelCatalogTests.swift src/Tests/CCProxyTests/ServerManagerConfigTests.swift src/Tests/CCProxyTests/ThinkingProxyModelAliasTests.swift src/Sources/Resources/model-catalog-snapshot.json
   ```
   Expected output: no output and exit code 0. If execution discovered another current-valid snapshot fixture/helper that required schema `"2"`, stage that specific test fixture/helper too and document it in executor evidence.
 
@@ -390,7 +408,7 @@ This task prevents existing runtime cache snapshots, including user caches such 
   ```
   Expected output: one commit created on `work/2026-06-06-catalog-source-policy-v0-3-1-release`.
 
-## Task 7: Build v0.3.1 Build 14 Archive And Sign Appcast
+## Task 5: Build v0.3.1 Build 14 Archive And Sign Appcast
 
 - [ ] Re-run release preflight:
   ```bash
@@ -553,7 +571,7 @@ This task prevents existing runtime cache snapshots, including user caches such 
   ```
   Expected output: `CCProxy.app` and `CCProxy.app.zip` are not staged for commit; external staged asset verification uses filesystem checks only and `cmp -s` exits 0. Do not pass `/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip` to `git status`, `git diff`, `git check-ignore`, or any git pathspec command.
 
-## Task 8: Full Verification And Release Commit
+## Task 6: Full Verification And Release Commit
 
 - [ ] Run final full verification after appcast update:
   ```bash
@@ -596,13 +614,13 @@ This task prevents existing runtime cache snapshots, including user caches such 
   ```
   Expected output: one commit created on the work branch.
 
-- [ ] Record the build source commit SHA in executor and final-review summaries without creating extra artifact files:
+- [ ] Record the archive build source commit SHA in executor and final-review summaries without creating extra artifact files:
   ```bash
-  git rev-parse HEAD && git diff --quiet HEAD -- appcast.xml Makefile create-app-bundle.sh scripts/generate-model-catalog-snapshot.swift scripts/test-snapshot-generator.sh src/Package.swift src/Package.resolved src/Sources/ExternalModelCatalog.swift src/Sources/Resources/model-catalog-snapshot.json src/Sources/Resources/cli-proxy-api src/Tests/CCProxyTests/ExternalModelCatalogTests.swift docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/spec.md docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/evidence.md docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/plan.md
+  git rev-parse HEAD && git diff --quiet HEAD -- appcast.xml Makefile create-app-bundle.sh scripts/generate-model-catalog-snapshot.swift scripts/test-snapshot-generator.sh src/Package.swift src/Package.resolved src/Sources/ExternalModelCatalog.swift src/Sources/Resources/model-catalog-snapshot.json src/Sources/Resources/cli-proxy-api src/Tests/CCProxyTests/ExternalModelCatalogTests.swift src/Tests/CCProxyTests/ServerManagerConfigTests.swift src/Tests/CCProxyTests/ThinkingProxyModelAliasTests.swift docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/spec.md docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/evidence.md docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/plan.md
   ```
-  Expected output: first line is the build source commit SHA, and `git diff --quiet` exits 0 for release-relevant files. The executor must copy that SHA into its completion evidence and final-review must preserve it in the final-review PASS summary. Do not create release source manifest files, hash-list files, or other extra workflow artifacts; the only external file allowed by this plan is the staged release upload asset `/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip`.
+  Expected output: first line is `ARCHIVE_BUILD_SOURCE_COMMIT`, the commit whose source produced the signed `CCProxy.app.zip` and `appcast.xml`, and `git diff --quiet` exits 0 for release-relevant files at that commit. The executor must copy that SHA into its completion evidence and final-review must preserve it in the final-review PASS summary as `ARCHIVE_BUILD_SOURCE_COMMIT`. Do not confuse this with `FINAL_REVIEWED_HEAD_SHA`, which is the branch head after final-review and any final-review artifact commit. Do not create release source manifest files, hash-list files, or other extra workflow artifacts; the only external file allowed by this plan is the staged release upload asset `/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip`.
 
-## Task 9: Execute-Stage Code Review Gate Before Final Review
+## Task 7: Execute-Stage Code Review Gate Before Final Review
 
 - [ ] Inspect final branch status and commits:
   ```bash
@@ -614,7 +632,7 @@ This task prevents existing runtime cache snapshots, including user caches such 
   ```bash
   git diff --stat main...HEAD && git diff --name-only main...HEAD
   ```
-  Expected output: only approved files are changed: `appcast.xml`, `scripts/generate-model-catalog-snapshot.swift`, `scripts/test-snapshot-generator.sh`, `src/Sources/ExternalModelCatalog.swift`, `src/Sources/Resources/model-catalog-snapshot.json`, `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift`, `src/Tests/CCProxyTests/ServerManagerConfigTests.swift`, any other discovered current-valid snapshot test fixture/helper that required schema `"2"`, and the plan artifact if committed.
+  Expected output: only approved files are changed: `appcast.xml`, `scripts/generate-model-catalog-snapshot.swift`, `scripts/test-snapshot-generator.sh`, `src/Sources/ExternalModelCatalog.swift`, `src/Sources/Resources/model-catalog-snapshot.json`, `src/Tests/CCProxyTests/ExternalModelCatalogTests.swift`, `src/Tests/CCProxyTests/ServerManagerConfigTests.swift`, `src/Tests/CCProxyTests/ThinkingProxyModelAliasTests.swift`, any other discovered current-valid snapshot test fixture/helper that required schema `"2"`, and the plan artifact if committed.
 
 - [ ] Required EasyCode execute review gates before final-review handoff:
   - `code-spec-reviewer` must PASS against the approved spec and evidence.
@@ -623,7 +641,7 @@ This task prevents existing runtime cache snapshots, including user caches such 
 
 - [ ] Completion verifier expected evidence:
   - Baseline command rerun output for `make backend-version && scripts/test-snapshot-generator.sh && make test && make build`.
-  - Focused `ExternalModelCatalogTests` and `ServerManagerConfigTests` output after schema fixture updates.
+  - Focused `ExternalModelCatalogTests`, `ServerManagerConfigTests`, and affected `ThinkingProxyModelAliasTests` output after schema fixture updates.
   - `scripts/test-snapshot-generator.sh` output after schema fixture updates.
   - CLIProxyAPI source pin verification output for production and generator URLs.
   - Runtime cache stale-policy invalidation test output.
@@ -634,11 +652,11 @@ This task prevents existing runtime cache snapshots, including user caches such 
   - Sparkle public-key derivation check output proving `/Volumes/storage/artifact/sparkle/sparkle_ed25519_private_key` matches `SUPublicEDKey` in `src/Info.plist` and `CCProxy.app/Contents/Info.plist`, excluding private key material.
   - App metadata and architecture verification output.
   - External staged asset path `/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip` and matching SHA-256.
-  - Build source commit SHA from `git rev-parse HEAD`, recorded in command output and summaries only, plus confirmation that release-relevant files were clean at that SHA.
+  - `ARCHIVE_BUILD_SOURCE_COMMIT` from `git rev-parse HEAD`, recorded in command output and summaries only, plus confirmation that release-relevant files were clean at that SHA.
   - Git status/diff evidence proving no `.app`, `.zip`, Sparkle key, or root `.gitignore` changes are committed.
 - [ ] Execute stage stops after local commits, local verification, execute review gates, and completion-verifier evidence. Do not push the feature branch, create a PR, merge a PR, publish a release, update local `main`, or clean up worktrees/branches during execute or before final-review PASS.
 
-## Task 10: Final-Review Artifact Expectations
+## Task 8: Final-Review Artifact Expectations
 
 - [ ] Final-review must run after execute completion and before merge/release publication.
 - [ ] Final-review must independently verify:
@@ -652,14 +670,20 @@ This task prevents existing runtime cache snapshots, including user caches such 
   - Bundled snapshot satisfies the provider policy.
   - Sparkle public-key derivation from `/Volumes/storage/artifact/sparkle/sparkle_ed25519_private_key` matches `SUPublicEDKey` in both `src/Info.plist` and `CCProxy.app/Contents/Info.plist`; no private key contents or decoded private key bytes appear in evidence.
   - `appcast.xml` points to v0.3.1 build 14, its length equals the exact staged archive length, its signature equals fresh `sign_update --ed-key-file /Volumes/storage/artifact/sparkle/sparkle_ed25519_private_key` output for the exact archive, and Sparkle `--verify --ed-key-file /Volumes/storage/artifact/sparkle/sparkle_ed25519_private_key` passes without Keychain fallback.
-  - Final-review PASS summary records the build source commit SHA used for the staged archive/appcast consistency gate, without creating extra manifest artifacts.
+  - Final-review PASS summary records `ARCHIVE_BUILD_SOURCE_COMMIT`, the commit whose source produced the signed archive/appcast, and `FINAL_REVIEWED_HEAD_SHA`, the branch head after final-review and any final-review artifact commit used for PR merge. These must be recorded in summaries only, without creating extra manifest artifacts.
   - Generated `.app`/`.zip` and Sparkle key material are not committed.
   - Full verification passed after release metadata updates.
 - [ ] Stop if final-review is not PASS.
 
-## Task 11: Finish Commands After Final-Review PASS
+## Task 9: Finish Commands After Final-Review PASS
 
 Run finish commands only after final-review PASS and from the correct checkout as noted.
+
+- [ ] Confirm finish SHA inputs from final-review PASS before push or PR work:
+  ```bash
+  ARCHIVE_BUILD_SOURCE_COMMIT="${ARCHIVE_BUILD_SOURCE_COMMIT:?set to the archive build source commit SHA recorded in execute and final-review PASS summaries}" && FINAL_REVIEWED_HEAD_SHA="${FINAL_REVIEWED_HEAD_SHA:?set to the final-reviewed branch head SHA recorded in final-review PASS summary}" && git cat-file -e "$ARCHIVE_BUILD_SOURCE_COMMIT^{commit}" && git cat-file -e "$FINAL_REVIEWED_HEAD_SHA^{commit}" && test "$(git rev-parse HEAD)" = "$FINAL_REVIEWED_HEAD_SHA" && printf 'ARCHIVE_BUILD_SOURCE_COMMIT=%s\nFINAL_REVIEWED_HEAD_SHA=%s\n' "$ARCHIVE_BUILD_SOURCE_COMMIT" "$FINAL_REVIEWED_HEAD_SHA"
+  ```
+  Expected output prints both SHA variables, both commit objects exist, and current feature-branch `HEAD` equals `FINAL_REVIEWED_HEAD_SHA`. Stop if either SHA is missing, ambiguous, unavailable, or if feature branch `HEAD` differs from `FINAL_REVIEWED_HEAD_SHA`; do not use `ARCHIVE_BUILD_SOURCE_COMMIT` for PR head matching when final-review added a later artifact commit.
 
 - [ ] Push the feature branch after final-review PASS:
   ```bash
@@ -669,15 +693,15 @@ Run finish commands only after final-review PASS and from the correct checkout a
 
 - [ ] Create the PR after final-review PASS:
   ```bash
-  PR_BODY="$(printf '%s\n' '## Summary' '- enforce OAuth provider catalog sourcing from CLIProxyAPI official registry only' '- pin CLIProxyAPI catalog URLs to approved commit 5753d1a0896fd5bb9ace47adb17b0174ceb79e4d and invalidate stale old-policy runtime caches' '- keep compatible/API-key providers on models.dev and regenerate the bundled model catalog snapshot' '- prepare Sparkle appcast metadata for CCProxy v0.3.1 build 14' '' '## Verification' '- make backend-version && scripts/test-snapshot-generator.sh && make test && make build' "- cd src && swift test --filter 'ExternalModelCatalogTests|ServerManagerConfigTests'" '- scripts/test-snapshot-generator.sh after schema fixture updates' '- CLIProxyAPI source pin verification and runtime cache invalidation tests' '- pinned raw models.json and codex_client_models.json fetch/parse verification' '- snapshot policy Python verification' '- APP_VERSION=0.3.1 APP_BUILD_NUMBER=14 TARGET_ARCH=arm64 make sparkle-archive' '- Sparkle sign_update with --ed-key-file /Volumes/storage/artifact/sparkle/sparkle_ed25519_private_key' '- appcast v0.3.1 exact length/signature comparison and Sparkle --verify with explicit --ed-key-file')" && PR_URL="$(gh pr create --base main --head work/2026-06-06-catalog-source-policy-v0-3-1-release --title 'Enforce catalog source policy and prepare v0.3.1' --body "$PR_BODY")" && PR_NUMBER="$(gh pr view "$PR_URL" --json number --jq '.number')" && printf 'PR_URL=%s\nPR_NUMBER=%s\n' "$PR_URL" "$PR_NUMBER"
+  PR_BODY="$(printf '%s\n' '## Summary' '- enforce OAuth provider catalog sourcing from CLIProxyAPI official registry only' '- pin CLIProxyAPI catalog URLs to approved commit 5753d1a0896fd5bb9ace47adb17b0174ceb79e4d and invalidate stale old-policy runtime caches' '- keep compatible/API-key providers on models.dev and regenerate the bundled model catalog snapshot' '- prepare Sparkle appcast metadata for CCProxy v0.3.1 build 14' '' '## Verification' '- make backend-version && scripts/test-snapshot-generator.sh && make test && make build' "- cd src && swift test --filter 'ExternalModelCatalogTests|ServerManagerConfigTests|ThinkingProxyModelAliasTests'" '- scripts/test-snapshot-generator.sh after schema fixture updates' '- CLIProxyAPI source pin verification and runtime cache invalidation tests' '- pinned raw models.json and codex_client_models.json fetch/parse verification' '- snapshot policy Python verification' '- APP_VERSION=0.3.1 APP_BUILD_NUMBER=14 TARGET_ARCH=arm64 make sparkle-archive' '- Sparkle sign_update with --ed-key-file /Volumes/storage/artifact/sparkle/sparkle_ed25519_private_key' '- appcast v0.3.1 exact length/signature comparison and Sparkle --verify with explicit --ed-key-file')" && PR_URL="$(gh pr create --base main --head work/2026-06-06-catalog-source-policy-v0-3-1-release --title 'Enforce catalog source policy and prepare v0.3.1' --body "$PR_BODY")" && PR_NUMBER="$(gh pr view "$PR_URL" --json number --jq '.number')" && printf 'PR_URL=%s\nPR_NUMBER=%s\n' "$PR_URL" "$PR_NUMBER"
   ```
   Expected output: `PR_URL=...` and `PR_NUMBER=...`. Stop if final-review PASS is not available, or if `PR_NUMBER` is empty. Preserve `PR_NUMBER` or `PR_URL` in finish evidence for the root-only merge command.
 
-- [ ] Merge the PR from the repository root only, without deleting the branch while the feature worktree exists:
+- [ ] Verify the PR head still equals the final-reviewed branch head before mutating `main`, then merge from the repository root only without deleting the branch while the feature worktree exists:
   ```bash
-  cd "/Volumes/storage/workspace/ccproxy" && pwd && git rev-parse --show-toplevel && PR_NUMBER="${PR_NUMBER:?set to the PR number captured when creating the PR}" && gh pr merge "$PR_NUMBER" --merge
+  cd "/Volumes/storage/workspace/ccproxy" && pwd && test "$(git rev-parse --show-toplevel)" = "/Volumes/storage/workspace/ccproxy" && PR_NUMBER="${PR_NUMBER:?set to the PR number captured when creating the PR}" && FINAL_REVIEWED_HEAD_SHA="${FINAL_REVIEWED_HEAD_SHA:?set to the final-reviewed branch head SHA recorded in final-review PASS summary}" && PR_HEAD_SHA="$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')" && printf 'PR_HEAD_SHA=%s\nFINAL_REVIEWED_HEAD_SHA=%s\n' "$PR_HEAD_SHA" "$FINAL_REVIEWED_HEAD_SHA" && test "$PR_HEAD_SHA" = "$FINAL_REVIEWED_HEAD_SHA" && gh pr merge "$PR_NUMBER" --merge --match-head-commit "$FINAL_REVIEWED_HEAD_SHA"
   ```
-  Expected output: top-level is `/Volumes/storage/workspace/ccproxy` and the selected PR is merged. Do not run this command from the feature worktree. Do not use `--delete-branch` while `/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-catalog-source-policy-v0-3-1-release` exists. If branch protection requires a different merge method, stop and report the required method.
+  Expected output: top-level is `/Volumes/storage/workspace/ccproxy`, `PR_HEAD_SHA` exactly equals `FINAL_REVIEWED_HEAD_SHA`, and the selected PR is merged with `--match-head-commit "$FINAL_REVIEWED_HEAD_SHA"`. This pre-merge gate must detect PR head drift before local `main` is mutated; the later source-identity gate remains as a second defense, not the first drift check. Do not run this command from the feature worktree. Do not use `--delete-branch` while `/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-catalog-source-policy-v0-3-1-release` exists. If the PR head changed, `--match-head-commit` fails, branch protection requires a different merge method, or `PR_HEAD_SHA` differs from `FINAL_REVIEWED_HEAD_SHA`, stop and return to execute/final-review to rebuild, restage, re-sign, update appcast if needed, and re-review from the actual PR head.
 
 - [ ] Update local `main` from the repository root, not from inside the feature worktree:
   ```bash
@@ -696,11 +720,11 @@ Run finish commands only after final-review PASS and from the correct checkout a
   ```
   Expected output: recent log includes the merged PR commit and `main appcast v0.3.1 verified`.
 
-- [ ] Gate release publication on source consistency between merged `main` and the build source commit used to build/sign/stage the archive:
+- [ ] Gate release publication on full-tree source identity between merged `main` and `ARCHIVE_BUILD_SOURCE_COMMIT`, allowing only the final-review artifact difference:
   ```bash
-  BUILT_SOURCE_COMMIT="${BUILT_SOURCE_COMMIT:?set to the build source commit SHA recorded in execute and final-review PASS summaries}" && MERGED_SHA="$(git rev-parse HEAD)" && test -s "/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip" && git cat-file -e "$BUILT_SOURCE_COMMIT^{commit}" && if git merge-base --is-ancestor "$BUILT_SOURCE_COMMIT" "$MERGED_SHA"; then echo "built source commit is included in merged main history"; else echo "built source commit not in merged history; requiring release-relevant file equivalence"; fi && git diff --quiet "$BUILT_SOURCE_COMMIT..$MERGED_SHA" -- appcast.xml Makefile create-app-bundle.sh scripts/generate-model-catalog-snapshot.swift scripts/test-snapshot-generator.sh src/Package.swift src/Package.resolved src/Sources/ExternalModelCatalog.swift src/Sources/Resources/model-catalog-snapshot.json src/Sources/Resources/cli-proxy-api src/Tests/CCProxyTests/ExternalModelCatalogTests.swift src/Tests/CCProxyTests/ServerManagerConfigTests.swift docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/spec.md docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/evidence.md docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/plan.md && echo "release source consistency verified"
+  pwd && test "$(git rev-parse --show-toplevel)" = "/Volumes/storage/workspace/ccproxy" && ARCHIVE_BUILD_SOURCE_COMMIT="${ARCHIVE_BUILD_SOURCE_COMMIT:?set to the archive build source commit SHA recorded in execute and final-review PASS summaries}" && FINAL_REVIEWED_HEAD_SHA="${FINAL_REVIEWED_HEAD_SHA:?set to the final-reviewed branch head SHA recorded in final-review PASS summary}" && MERGED_RELEASE_SHA="$(git rev-parse HEAD)" && test -s "/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip" && git cat-file -e "$ARCHIVE_BUILD_SOURCE_COMMIT^{commit}" && git cat-file -e "$FINAL_REVIEWED_HEAD_SHA^{commit}" && if git merge-base --is-ancestor "$FINAL_REVIEWED_HEAD_SHA" "$MERGED_RELEASE_SHA" || test "$MERGED_RELEASE_SHA" = "$FINAL_REVIEWED_HEAD_SHA"; then echo "final-reviewed head is represented in merged main history"; else echo "final-reviewed head not represented in merged history" >&2; exit 1; fi && if git merge-base --is-ancestor "$ARCHIVE_BUILD_SOURCE_COMMIT" "$MERGED_RELEASE_SHA"; then echo "archive build source commit is included in merged main history"; else echo "archive build source commit not in merged history; requiring full-tree source identity"; fi && git diff --quiet "$ARCHIVE_BUILD_SOURCE_COMMIT" "$MERGED_RELEASE_SHA" -- . ':(exclude)docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/final-review.md' && printf 'ARCHIVE_BUILD_SOURCE_COMMIT=%s\nFINAL_REVIEWED_HEAD_SHA=%s\nMERGED_RELEASE_SHA=%s\nrelease source identity verified\n' "$ARCHIVE_BUILD_SOURCE_COMMIT" "$FINAL_REVIEWED_HEAD_SHA" "$MERGED_RELEASE_SHA"
   ```
-  Expected output: either `built source commit is included in merged main history` or `built source commit not in merged history; requiring release-relevant file equivalence`, followed by `release source consistency verified`. Stop if `BUILT_SOURCE_COMMIT` is not set to the SHA recorded in execute/final-review summaries, if the commit object is unavailable, if the staged archive is missing or empty, or if `git diff --quiet` finds any release-relevant source drift between the build source commit and merged `main`. If source drift is detected, do not publish; return to execute/final-review to rebuild, restage, re-sign, update appcast if needed, and re-review from the merged source.
+  Expected output: first line is `/Volumes/storage/workspace/ccproxy`, `final-reviewed head is represented in merged main history`, then either `archive build source commit is included in merged main history` or `archive build source commit not in merged history; requiring full-tree source identity`, followed by the three SHA lines and `release source identity verified`. Stop if this is not running from the root checkout, if `ARCHIVE_BUILD_SOURCE_COMMIT` or `FINAL_REVIEWED_HEAD_SHA` is not set to the SHA recorded in execute/final-review summaries, if either commit object is unavailable, if `FINAL_REVIEWED_HEAD_SHA` is not represented in merged `main`, if the staged archive is missing or empty, or if the full-tree `git diff --quiet` finds any drift other than `docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/final-review.md`. If this diff is not clean, do not publish a stale archive; return to execute/plan as appropriate to rebuild, restage, re-sign, update appcast if needed, and re-review from the actual merged source.
 
 - [ ] Re-run the Sparkle public-key derivation check before release publication, comparing the approved private key to merged source `src/Info.plist` and the built app plist in the feature worktree:
   ```bash
@@ -728,27 +752,54 @@ Run finish commands only after final-review PASS and from the correct checkout a
 
 - [ ] Publish GitHub Release from local `main` using the staged asset outside the repo:
   ```bash
-  MERGED_SHA="$(git rev-parse HEAD)" && gh release create "v0.3.1" "/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip#CCProxy.app.zip" --target "$MERGED_SHA" --title "CCProxy v0.3.1" --notes "CCProxy v0.3.1 build 14 updates model catalog source policy so OAuth providers use the official CLIProxyAPI registry and compatible/API-key providers use models.dev."
+  MERGED_RELEASE_SHA="${MERGED_RELEASE_SHA:-$(git rev-parse HEAD)}" && test "$MERGED_RELEASE_SHA" = "$(git rev-parse HEAD)" && gh release create "v0.3.1" "/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip#CCProxy.app.zip" --target "$MERGED_RELEASE_SHA" --title "CCProxy v0.3.1" --notes "CCProxy v0.3.1 build 14 updates model catalog source policy so OAuth providers use the official CLIProxyAPI registry and compatible/API-key providers use models.dev."
   ```
   Expected output: release URL for `v0.3.1`. Stop if `gh` reports a tag/release collision.
 
-- [ ] Verify release, tag target, and asset:
+- [ ] Assert the published tag target is the merged release SHA before asset verification:
   ```bash
-  gh release view "v0.3.1" --json tagName,targetCommitish,assets,url && git fetch origin --tags && git rev-list -n 1 "v0.3.1" && git rev-parse HEAD
+  MERGED_RELEASE_SHA="${MERGED_RELEASE_SHA:-$(git rev-parse HEAD)}" && git fetch --force origin "refs/tags/v0.3.1:refs/tags/v0.3.1" && PUBLISHED_TAG_SHA="$(git rev-list -n 1 v0.3.1)" && CURRENT_MAIN_SHA="$(git rev-parse HEAD)" && printf 'PUBLISHED_TAG_SHA=%s\nMERGED_RELEASE_SHA=%s\nCURRENT_MAIN_SHA=%s\n' "$PUBLISHED_TAG_SHA" "$MERGED_RELEASE_SHA" "$CURRENT_MAIN_SHA" && test "$PUBLISHED_TAG_SHA" = "$MERGED_RELEASE_SHA" && test "$PUBLISHED_TAG_SHA" = "$CURRENT_MAIN_SHA"
   ```
-  Expected output: JSON includes `tagName` `v0.3.1`, asset `CCProxy.app.zip`, and `targetCommitish` matching the merged commit or tag target; `git rev-list -n 1 v0.3.1` matches `git rev-parse HEAD`.
+  Expected output prints matching `PUBLISHED_TAG_SHA`, `MERGED_RELEASE_SHA`, and `CURRENT_MAIN_SHA`. Stop if the tag points anywhere other than updated local `main` at `MERGED_RELEASE_SHA`.
 
-- [ ] Verify downloadable asset hash against staged asset:
+- [ ] Verify release, tag target, and asset metadata without downloading or creating extra artifacts:
   ```bash
-  rm -f "/tmp/CCProxy-v0.3.1-download.zip" && gh release download "v0.3.1" --pattern "CCProxy.app.zip" --dir "/tmp" && mv "/tmp/CCProxy.app.zip" "/tmp/CCProxy-v0.3.1-download.zip" && shasum -a 256 "/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip" "/tmp/CCProxy-v0.3.1-download.zip"
+  STAGED_ASSET="/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip" && STAGED_SIZE="$(stat -f '%z' "$STAGED_ASSET")" && STAGED_SHA="$(shasum -a 256 "$STAGED_ASSET" | cut -d ' ' -f 1)" && RELEASE_JSON="$(gh release view "v0.3.1" --json assets,tagName,name,url)" && RELEASE_JSON="$RELEASE_JSON" STAGED_SIZE="$STAGED_SIZE" STAGED_SHA="$STAGED_SHA" python3 - <<'PY'
+  import json
+  import os
+  data = json.loads(os.environ['RELEASE_JSON'])
+  assert data['tagName'] == 'v0.3.1', data['tagName']
+  assets = data.get('assets', [])
+  matches = [asset for asset in assets if asset.get('name') == 'CCProxy.app.zip']
+  assert len(matches) == 1, f'expected one CCProxy.app.zip asset, found {len(matches)}'
+  asset = matches[0]
+  expected_size = int(os.environ['STAGED_SIZE'])
+  staged_sha = os.environ['STAGED_SHA']
+  assert int(asset.get('size', -1)) == expected_size, f"asset size {asset.get('size')} != staged size {expected_size}"
+  expected_asset_url = 'https://github.com/DevNewbie1826/ccproxy/releases/download/v0.3.1/CCProxy.app.zip'
+  assert asset.get('url') == expected_asset_url, f"asset URL {asset.get('url')} != {expected_asset_url}"
+  digest = asset.get('digest')
+  if digest:
+      normalized = digest.removeprefix('sha256:')
+      assert normalized == staged_sha, f'asset digest {digest} != staged sha256 {staged_sha}'
+      print(f"release asset metadata verified with digest: name={asset['name']} size={asset['size']} digest={digest} url={asset['url']}")
+  else:
+      print(f"release asset metadata verified without GitHub digest: name={asset['name']} size={asset['size']} url={asset['url']} staged_sha256={staged_sha}")
+  PY
   ```
-  Expected output: both SHA-256 hashes match.
+  Expected output: release JSON validates `tagName` `v0.3.1`, one asset named `CCProxy.app.zip`, asset size matching `/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip`, asset URL exactly `https://github.com/DevNewbie1826/ccproxy/releases/download/v0.3.1/CCProxy.app.zip`, and asset digest matching the staged SHA-256 if GitHub exposes `digest`; otherwise record the staged SHA-256 with the asset name/size/url evidence. Do not download the release asset or create any extra release verification artifact.
+
+- [ ] Confirm release verification used only the approved external staged asset and repository/worktree files:
+  ```bash
+  test -s "/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip" && shasum -a 256 "/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip"
+  ```
+  Expected output: staged asset exists and the staged asset SHA-256 is printed for evidence. No downloaded release asset, manifest, hash-list, or other extra artifact is created.
 
 - [ ] Remove only generated local app artifacts from the feature worktree and prove the feature worktree is clean before removing it:
   ```bash
-  test -s "/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip" && cmp -s "/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip" "/tmp/CCProxy-v0.3.1-download.zip" && if git -C "/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-catalog-source-policy-v0-3-1-release" ls-files --error-unmatch CCProxy.app >/dev/null 2>&1; then echo "refusing to remove tracked CCProxy.app" >&2; exit 1; fi && if git -C "/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-catalog-source-policy-v0-3-1-release" ls-files --error-unmatch CCProxy.app.zip >/dev/null 2>&1; then echo "refusing to remove tracked CCProxy.app.zip" >&2; exit 1; fi && rm -rf "/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-catalog-source-policy-v0-3-1-release/CCProxy.app" "/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-catalog-source-policy-v0-3-1-release/CCProxy.app.zip" && git -C "/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-catalog-source-policy-v0-3-1-release" status --short
+  test -s "/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip" && if git -C "/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-catalog-source-policy-v0-3-1-release" ls-files --error-unmatch CCProxy.app >/dev/null 2>&1; then echo "refusing to remove tracked CCProxy.app" >&2; exit 1; fi && if git -C "/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-catalog-source-policy-v0-3-1-release" ls-files --error-unmatch CCProxy.app.zip >/dev/null 2>&1; then echo "refusing to remove tracked CCProxy.app.zip" >&2; exit 1; fi && rm -rf "/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-catalog-source-policy-v0-3-1-release/CCProxy.app" "/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-catalog-source-policy-v0-3-1-release/CCProxy.app.zip" && git -C "/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-catalog-source-policy-v0-3-1-release" status --short
   ```
-  Expected output: no `refusing to remove tracked CCProxy.app` or `refusing to remove tracked CCProxy.app.zip` message, and final `git status --short` output is empty. This step must check `CCProxy.app` and `CCProxy.app.zip` independently before removal, must not remove tracked files, must not remove `/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip`, and must run only after final-review PASS plus successful release and external asset verification.
+  Expected output: staged external asset exists, no `refusing to remove tracked CCProxy.app` or `refusing to remove tracked CCProxy.app.zip` message appears, and final `git status --short` output is empty. This step must check `CCProxy.app` and `CCProxy.app.zip` independently before removal, must not remove tracked files, must not remove `/Volumes/storage/artifact/ccproxy/releases/v0.3.1/CCProxy.app.zip`, and must run only after final-review PASS plus successful release and external asset metadata verification.
 
 - [ ] Cleanup EasyCode-owned worktree and local feature branch from the root checkout:
   ```bash
@@ -769,7 +820,9 @@ Run finish commands only after final-review PASS and from the correct checkout a
 - Stop if stale old-policy runtime cache validation tests fail or if the implementation deletes user cache files instead of rejecting old-policy snapshots through validation.
 - Stop if `.gitignore`, Sparkle key material, decoded key bytes, `CCProxy.app`, `CCProxy.app.zip`, or external staged assets are staged for commit.
 - Stop if GitHub tag `v0.3.1` or release `v0.3.1` already exists before publication.
-- Stop if merged `main` release-relevant source differs from the build source commit SHA recorded in execute/final-review summaries; do not publish until the archive is rebuilt, restaged, re-signed, appcast is updated if needed, and final-review passes again.
+- Stop if `ARCHIVE_BUILD_SOURCE_COMMIT`, `FINAL_REVIEWED_HEAD_SHA`, or `MERGED_RELEASE_SHA` is missing, unavailable, or used for the wrong gate. PR merge must match `FINAL_REVIEWED_HEAD_SHA`; release source identity must compare `ARCHIVE_BUILD_SOURCE_COMMIT` to `MERGED_RELEASE_SHA` with only `docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/final-review.md` allowed to differ.
+- Stop if merged `main` full-tree source identity differs from `ARCHIVE_BUILD_SOURCE_COMMIT` by anything other than `docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/final-review.md`; do not publish until the archive is rebuilt, restaged, re-signed, appcast is updated if needed, and final-review passes again.
+- Stop if published tag `v0.3.1` does not resolve to `MERGED_RELEASE_SHA` and current updated local `main` HEAD.
 - Stop if `sign_update` output length does not match `wc -c < CCProxy.app.zip`, if `appcast.xml` signature differs from fresh `sign_update --ed-key-file /Volumes/storage/artifact/sparkle/sparkle_ed25519_private_key` output, or if Sparkle `--verify --ed-key-file /Volumes/storage/artifact/sparkle/sparkle_ed25519_private_key` fails or would fall back to Keychain.
 - Stop before signing or publishing if the public key derived from `/Volumes/storage/artifact/sparkle/sparkle_ed25519_private_key` does not match `SUPublicEDKey` in `src/Info.plist` or the built `CCProxy.app/Contents/Info.plist`.
 - Stop if any push, PR creation, PR merge, release publication, local `main` update, or cleanup command is attempted before final-review PASS.
