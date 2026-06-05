@@ -1669,7 +1669,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
 
         // Write a stale cache
         let staleSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["test"],
             providerModels: [

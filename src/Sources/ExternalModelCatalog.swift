@@ -5,6 +5,11 @@ import Foundation
 /// Enum namespace for external model catalog parsing, merging, filtering, and rendering.
 enum ExternalModelCatalog {
 
+    /// Current catalog schema version. Snapshots with a different schema version are
+    /// rejected by isValidSnapshot so stale runtime caches from previous policy versions
+    /// cannot be served after a source-policy update.
+    static let currentSchemaVersion = "2"
+
     /// CLIProxyAPI primary provider key → CCProxy provider ID normalization.
     /// Only keys present in this map are emitted as CCProxy providers.
     static let primaryProviderMapping: [String: String] = [
@@ -12,14 +17,11 @@ enum ExternalModelCatalog {
         "codex-free": "codex",
         "codex-team": "codex",
         "codex-plus": "codex",
-        "codex-pro": "codex",
-        "kimi": "kimi"
+        "codex-pro": "codex"
     ]
 
     /// CCProxy provider ID → models.dev provider key (reverse lookup for secondary source).
     static let secondaryProviderMapping: [String: String] = [
-        "claude": "anthropic",
-        "codex": "openai",
         "zai": "zai-coding-plan",
         "minimax": "minimax-coding-plan",
         "kimi": "moonshotai",
@@ -63,13 +65,14 @@ enum ExternalModelCatalog {
         return sources.contains { knownSourceIdentifiers.contains($0) }
     }
 
-    /// Strict validation for a complete snapshot: requires non-empty schemaVersion,
-    /// valid external source metadata, non-empty providerModels, every provider
-    /// has a non-empty model array, and every model entry has a non-empty ID.
-    /// Rejects any provider with an empty array or any model with an empty ID.
+    /// Strict validation for a complete snapshot: requires schemaVersion matching
+    /// the current policy version, valid external source metadata, non-empty
+    /// providerModels, every provider has a non-empty model array, and every model
+    /// entry has a non-empty ID. Rejects any provider with an empty array or any
+    /// model with an empty ID.
     static func isValidSnapshot(_ snapshot: CatalogSnapshot) -> Bool {
-        // Non-empty schemaVersion
-        guard !snapshot.schemaVersion.isEmpty else { return false }
+        // Schema version must match current policy version
+        guard snapshot.schemaVersion == currentSchemaVersion else { return false }
 
         // Valid external source metadata
         guard isValidSnapshotSources(snapshot.sources) else { return false }
@@ -369,7 +372,7 @@ enum ExternalModelCatalog {
 
         let timestamp = clock.now
         return CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: ExternalModelCatalog.currentSchemaVersion,
             generatedAt: ISO8601DateFormatter().string(from: timestamp),
             sources: ["models.json", "codex_client_models.json", "models.dev"],
             providerModels: mergedModels
@@ -893,8 +896,8 @@ class URLSessionCatalogFetcher: CatalogFetcher {
     let session: URLSession
     let timeoutInterval: TimeInterval
 
-    private let modelsJSONURL = URL(string: "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/models.json")!
-    private let codexClientURL = URL(string: "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/codex_client_models.json")!
+    private let modelsJSONURL = URL(string: "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/5753d1a0896fd5bb9ace47adb17b0174ceb79e4d/internal/registry/models/models.json")!
+    private let codexClientURL = URL(string: "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/5753d1a0896fd5bb9ace47adb17b0174ceb79e4d/internal/registry/models/codex_client_models.json")!
     private let modelsDevURL = URL(string: "https://models.dev/api.json")!
 
     init(session: URLSession? = nil, timeoutInterval: TimeInterval = 15.0) {

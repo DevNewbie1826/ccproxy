@@ -28,6 +28,8 @@
 - The current worktree may already contain approved completed diffs from Tasks 0-2 plus in-progress Task 2A remediation diffs, including URL pins, source-policy tests/mappings, production schema `"2"` validation, and partial schema `"2"` fixture changes.
 - The executor must not try to rerun Tasks 0-2 from a pristine baseline, must not restore or revert their approved changes, and must not treat their historical RED expectations as current expected failures.
 - Remaining execution resumes at Task 2A remediation and atomic completion. Task 2A must complete fixture migration, generator mapping/schema updates, bundled snapshot regeneration, and validation as one review unit before requesting task-level review.
+- Task 2A has a documented historical TDD evidence gap: pre-edit RED evidence was not captured for `testProviderSourcePolicy_snapshotGeneratorMappingsMatchProductionPolicy` before generator mapping/schema edits. This plan revision does not pretend that evidence exists. Reviewers must judge that guard against the recovery evidence path in Task 2A: a reversible negative-control mutation of only `scripts/generate-model-catalog-snapshot.swift` back to the old/wrong generator mapping/schema, focused RED showing the guard fails, byte-for-byte restoration of the current generator file, and focused/broad GREEN verification.
+- Executor-provided recovery evidence paths for the Task 2A generator guard are: RED `/var/folders/v0/g2h4nhxd64j63j7tnr3rc87c0000gn/T/opencode/task2a-red-green-evidence/red-generator-guard.txt`; focused GREEN `/var/folders/v0/g2h4nhxd64j63j7tnr3rc87c0000gn/T/opencode/task2a-red-green-evidence/green-generator-guard-focused.txt`; broad GREEN `/var/folders/v0/g2h4nhxd64j63j7tnr3rc87c0000gn/T/opencode/task2a-red-green-evidence/green-broad-tests.txt`; snapshot-generator GREEN `/var/folders/v0/g2h4nhxd64j63j7tnr3rc87c0000gn/T/opencode/task2a-red-green-evidence/green-snapshot-generator-script.txt`.
 - No separate state, ledger, or progress artifact records this context; this section is the sole workflow progress context for the resume.
 
 ## Scope Lock
@@ -248,7 +250,7 @@ This is one atomic executor assignment and one review unit. It prevents existing
   ```bash
   git status --short && git diff --name-only && git diff -- src/Sources/ExternalModelCatalog.swift scripts/generate-model-catalog-snapshot.swift scripts/test-snapshot-generator.sh src/Tests/CCProxyTests/ExternalModelCatalogTests.swift src/Tests/CCProxyTests/ServerManagerConfigTests.swift src/Tests/CCProxyTests/ThinkingProxyModelAliasTests.swift src/Sources/Resources/model-catalog-snapshot.json
   ```
-  Expected output: diffs are limited to approved completed Tasks 0-2 and in-progress Task 2A remediation. Stop if unrelated implementation files appear, if app/release artifacts are staged, or if the generator mapping/schema has already been changed without recorded generator RED evidence; do not revert approved completed work to recreate a pristine baseline.
+  Expected output: diffs are limited to approved completed Tasks 0-2 and in-progress Task 2A remediation. Stop if unrelated implementation files appear or if app/release artifacts are staged. If generator mapping/schema has already been changed without pre-edit RED evidence, do not revert approved completed work to recreate a pristine baseline; use the Task 2A generator-guard recovery evidence path below and document the historical TDD evidence gap honestly in executor and reviewer summaries.
 
 - [ ] Treat the previous Task 2A cache-schema RED as already observed if executor evidence records the focused stale-schema command failing before production schema validation changed. Do not revert production schema validation or fixtures to recreate that RED.
 - [ ] If the previous cache-schema RED evidence is not available and production schema validation has not yet been changed, add or verify the cache invalidation tests below and run the focused RED command. If production schema validation has already changed and no RED evidence exists, stop and report the evidence gap rather than reverting code.
@@ -274,21 +276,33 @@ This is one atomic executor assignment and one review unit. It prevents existing
 
 ### Task 2A Substep: Generator Policy And Schema RED/GREEN
 
-- [ ] Before adding the generator guard or editing generator mapping/schema, inspect the current generator diff:
+- [ ] Review and preserve the historical evidence boundary for the generator guard:
   ```bash
   git diff -- scripts/generate-model-catalog-snapshot.swift
   ```
-  Expected output may include Task 0 approved URL pin changes. Stop if mapping or schema changes are already present and no generator mapping/schema RED evidence was recorded; do not revert generator changes to manufacture RED.
+  Expected output may include Task 0 approved URL pin changes plus in-progress Task 2A generator mapping/schema changes. If mapping or schema changes are already present, do not claim pre-edit RED evidence and do not revert the worktree to manufacture history. Continue only if the generator guard exists and the reversible negative-control recovery evidence below is or will be captured.
 - [ ] Add or update the generator mapping/schema guard test that reuses the Task 0 helper-derived repository-root path for `scripts/generate-model-catalog-snapshot.swift` and verifies the generator mapping source does not contain `"claude": "anthropic"`, `"codex": "openai"`, or `"kimi": "kimi"`, does contain `"kimi": "moonshotai"`, `"zai": "zai-coding-plan"`, `"minimax": "minimax-coding-plan"`, and `"opencode-go": "opencode-go"`, and emits current policy schema `schemaVersion: "2"` instead of old schema `schemaVersion: "1"`.
-- [ ] Run RED before any mapping/schema edit to `scripts/generate-model-catalog-snapshot.swift` if generator mapping/schema RED evidence has not already been recorded:
+- [ ] Use this acceptance rule for `testProviderSourcePolicy_snapshotGeneratorMappingsMatchProductionPolicy`: because pre-edit RED was not captured before the generator mapping/schema edits, reviewers must not require impossible historical RED evidence. Required recovery evidence is a reversible negative-control mutation test: temporarily mutate only `scripts/generate-model-catalog-snapshot.swift` to the old/wrong generator policy/schema (`"claude": "anthropic"`, `"codex": "openai"`, primary `"kimi": "kimi"`, or old schema `"1"` as needed to exercise the guard), run the focused guard test and observe failure, restore the generator file byte-for-byte to the current intended implementation, then rerun focused and broad GREEN commands.
+- [ ] If the recovery evidence has not already been captured, capture it with these exact constraints before requesting Task 2A review: no production source, test, snapshot, fixture, appcast, or release artifact may be changed during the negative-control mutation; only `scripts/generate-model-catalog-snapshot.swift` may be temporarily changed and it must be restored byte-for-byte afterward.
+- [ ] Run the focused negative-control RED during the temporary mutation, or cite the existing raw evidence path if already captured:
   ```bash
   cd src && swift test --filter ExternalModelCatalogTests.testProviderSourcePolicy_snapshotGeneratorMappingsMatchProductionPolicy
   ```
-  Expected failure mode: the newly added generator mapping/schema guard fails against the pre-generator-change state because the generator still contains old mapping literals for OAuth secondary mapping or primary `kimi`, still emits old schema `"1"`, or both. Stop if this test passes before generator edits; reassess whether the guard exercises the intended generator drift.
-- [ ] Edit `scripts/generate-model-catalog-snapshot.swift` within this same atomic task only after the generator guard RED has been observed or previously recorded in executor evidence.
+  Expected failure mode for recovery RED: the guard fails when the generator is temporarily mutated to the old/wrong mapping/schema, proving it detects generator drift. Existing captured RED evidence is `/var/folders/v0/g2h4nhxd64j63j7tnr3rc87c0000gn/T/opencode/task2a-red-green-evidence/red-generator-guard.txt`, which records 5 failures under the negative-control mutation. Stop if the negative-control test passes, if any file other than the generator changed during mutation, or if byte-for-byte restoration cannot be proven.
+- [ ] Restore `scripts/generate-model-catalog-snapshot.swift` byte-for-byte after the negative-control RED and verify restoration before GREEN:
+  ```bash
+  git diff -- scripts/generate-model-catalog-snapshot.swift
+  ```
+  Expected output: the generator diff is exactly the intended Task 0 and Task 2A implementation diff, with no temporary old/wrong negative-control mutation remaining. If available, compare to the executor's pre-mutation checksum or saved diff in command output; do not create a new artifact file for this plan revision.
+- [ ] Edit or verify `scripts/generate-model-catalog-snapshot.swift` within this same atomic task only after either normal pre-edit RED was captured before generator edits or the revised negative-control recovery RED has been captured and restored.
 - [ ] Apply the same mapping change as production: remove primary `kimi`; remove secondary `claude` and `codex`; keep secondary `zai`, `minimax`, `kimi`, and `opencode-go`.
 - [ ] Update generator snapshot creation to emit the same current policy schema version required by `ExternalModelCatalog.isValidSnapshot`: `schemaVersion: "2"`.
 - [ ] Update `scripts/test-snapshot-generator.sh` expectations and fixtures so current-valid generated snapshots use schema `"2"`, required `sources` includes `models.json`, `codex_client_models.json`, and `models.dev`, and stale schema `"1"` appears only in explicit invalidation/fallback test contexts.
+- [ ] Run focused generator-guard GREEN after restoration:
+  ```bash
+  cd src && swift test --filter ExternalModelCatalogTests.testProviderSourcePolicy_snapshotGeneratorMappingsMatchProductionPolicy
+  ```
+  Expected output: the generator mapping/schema guard passes with zero failures. Existing captured focused GREEN evidence is `/var/folders/v0/g2h4nhxd64j63j7tnr3rc87c0000gn/T/opencode/task2a-red-green-evidence/green-generator-guard-focused.txt`.
 
 ### Task 2A Substep: Regenerate Bundled Snapshot And Verify Data
 
@@ -367,6 +381,7 @@ This is one atomic executor assignment and one review unit. It prevents existing
   Expected output: production `currentSchemaVersion = "2"` validation, generator schema/mapping updates, tracked bundled snapshot regeneration to schema `"2"`, affected fixtures, and test script updates are all present together. The actual bundled snapshot must be accepted by `ExternalModelCatalog.isValidSnapshot` via tests. Only explicit stale old-policy invalidation/fallback fixtures remain at schema `"1"`; no user cache files are created, deleted, or committed.
 
 - [ ] Atomic review gate: request `code-spec-reviewer` and `code-quality-reviewer` only after every Task 2A substep above is complete and the full atomic GREEN verification passes. Reviewers must evaluate schema validation, generator mappings/schema, regenerated bundled snapshot, and affected fixtures as one consistent unit.
+- [ ] Task 2A review acceptance for the generator mapping/schema guard: `code-spec-reviewer` must accept the documented historical TDD evidence gap and evaluate the guard using the revised recovery path, not by requiring non-existent pre-edit RED. The minimum acceptable evidence is the negative-control RED file, byte-for-byte restoration proof in executor command output, focused GREEN file, broad GREEN file, and snapshot-generator script GREEN file listed in Execute Resume Context. If any of those recovery evidence pieces is missing, stale, or inconsistent with the current diff, return to executor for recovery verification rather than failing solely because pre-edit RED was not captured.
 
 ## Task 3: Full Pre-Release Verification Before Build Artifacts
 
@@ -645,6 +660,7 @@ This is one atomic executor assignment and one review unit. It prevents existing
   - `scripts/test-snapshot-generator.sh` output after schema fixture updates.
   - CLIProxyAPI source pin verification output for production and generator URLs.
   - Runtime cache stale-policy invalidation test output.
+  - Task 2A generator mapping/schema guard recovery evidence: explicit statement that pre-edit RED was not captured; negative-control RED output for `testProviderSourcePolicy_snapshotGeneratorMappingsMatchProductionPolicy`; proof that only `scripts/generate-model-catalog-snapshot.swift` was temporarily mutated; proof of byte-for-byte restoration; focused GREEN output; broad GREEN output; and `scripts/test-snapshot-generator.sh` GREEN output. Accepted raw evidence paths are `/var/folders/v0/g2h4nhxd64j63j7tnr3rc87c0000gn/T/opencode/task2a-red-green-evidence/red-generator-guard.txt`, `/var/folders/v0/g2h4nhxd64j63j7tnr3rc87c0000gn/T/opencode/task2a-red-green-evidence/green-generator-guard-focused.txt`, `/var/folders/v0/g2h4nhxd64j63j7tnr3rc87c0000gn/T/opencode/task2a-red-green-evidence/green-broad-tests.txt`, and `/var/folders/v0/g2h4nhxd64j63j7tnr3rc87c0000gn/T/opencode/task2a-red-green-evidence/green-snapshot-generator-script.txt`.
   - Snapshot policy Python verification output.
   - Pinned raw CLIProxyAPI source verification output for both `models.json` and `codex_client_models.json`, including successful Codex client JSON parse with slug entries.
   - Bundled snapshot source verification output showing `sources` includes `models.json`, `codex_client_models.json`, and `models.dev`.
@@ -812,7 +828,9 @@ Run finish commands only after final-review PASS and from the correct checkout a
 - Stop if the current checkout top-level is `/Volumes/storage/workspace/ccproxy` during plan/execute implementation tasks; implementation must happen in the isolated worktree.
 - Stop if `docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/spec.md` or `docs/easycode/2026-06-06-catalog-source-policy-v0-3-1-release/evidence.md` is missing.
 - Stop if any requested change conflicts with the approved spec or evidence.
-- Stop if tests do not fail during RED after adding policy tests; reassess whether tests actually exercise the old bug.
+- Stop if tests do not fail during RED after adding policy tests; reassess whether tests actually exercise the old bug. The Task 2A generator mapping/schema guard is the documented exception: its historical pre-edit RED was missed and is replaced by the negative-control recovery RED path described above.
+- Stop if a reviewer requires pre-edit RED for `testProviderSourcePolicy_snapshotGeneratorMappingsMatchProductionPolicy`; this revised plan explicitly replaces that impossible historical requirement with the documented negative-control recovery evidence path for Task 2A.
+- Stop if the Task 2A generator-guard negative-control recovery test passes under the old/wrong generator mapping/schema, if the temporary mutation touches any file other than `scripts/generate-model-catalog-snapshot.swift`, if byte-for-byte restoration cannot be proven, or if focused/broad GREEN verification is missing after restoration.
 - Stop if focused tests, snapshot generator tests, full verification, build, Sparkle signing, appcast validation, or release asset verification fails.
 - Stop before signing or release packaging if Python `cryptography` is unavailable for Sparkle Ed25519 public-key derivation; route to needs-more-evidence/tooling setup instead of continuing.
 - Stop if production or generator CLIProxyAPI source URLs still default to `CLIProxyAPI/main` instead of approved commit `5753d1a0896fd5bb9ace47adb17b0174ceb79e4d`.

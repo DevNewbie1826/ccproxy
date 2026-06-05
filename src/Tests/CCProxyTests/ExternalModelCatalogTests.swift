@@ -187,15 +187,11 @@ final class ExternalModelCatalogTests: XCTestCase {
         let result = ExternalModelCatalog.parseModelsDev(Self.modelsDevFixture)
         XCTAssertNotNil(result)
 
-        let claudeModels = result?.providerModels["claude"]
-        XCTAssertNotNil(claudeModels)
-        XCTAssertEqual(claudeModels?.count, 2)
-        XCTAssertTrue(claudeModels?.contains(where: { $0.id == "claude-sonnet-4" }) ?? false)
-
-        let codexModels = result?.providerModels["codex"]
-        XCTAssertNotNil(codexModels)
-        XCTAssertEqual(codexModels?.count, 1)
-        XCTAssertEqual(codexModels?.first?.id, "gpt-4o-mini")
+        // OAuth providers (claude, codex) are excluded from secondary mapping
+        XCTAssertNil(result?.providerModels["claude"],
+                     "claude must not appear in secondary parse — OAuth providers are primary-only")
+        XCTAssertNil(result?.providerModels["codex"],
+                     "codex must not appear in secondary parse — OAuth providers are primary-only")
 
         let zaiModels = result?.providerModels["zai"]
         XCTAssertNotNil(zaiModels)
@@ -295,7 +291,8 @@ final class ExternalModelCatalogTests: XCTestCase {
         XCTAssertEqual(proModel?.tier, "pro")
 
         XCTAssertNotNil(merged.providerModels["claude"])
-        XCTAssertNotNil(merged.providerModels["kimi"])
+        XCTAssertNil(merged.providerModels["kimi"],
+                     "kimi must not appear in primary-only merge — compatible providers are secondary-only")
     }
 
     func testMerge_codexClientSupplementsBySlug() {
@@ -362,10 +359,10 @@ final class ExternalModelCatalogTests: XCTestCase {
         // Primary codex models gpt-4o and o3 must be preserved
         XCTAssertTrue(codexIds.contains("gpt-4o"))
         XCTAssertTrue(codexIds.contains("o3"))
-        // Secondary fills missing model for partially covered provider
-        XCTAssertTrue(codexIds.contains("gpt-4o-mini"),
-                       "Secondary should fill missing codex model gpt-4o-mini")
-        // Primary owned_by must win over secondary for existing models
+        // Secondary does NOT fill models.dev-only models for OAuth providers
+        XCTAssertFalse(codexIds.contains("gpt-4o-mini"),
+                       "Secondary must not fill models.dev models for primary-only codex provider")
+        // Primary owned_by must be preserved
         let gpt4o = codexModels.first { $0.id == "gpt-4o" }!
         XCTAssertEqual(gpt4o.ownedBy, "openai",
                        "Primary codex owned_by should be preserved")
@@ -628,7 +625,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
     private func makeTestSnapshot() -> CatalogSnapshot {
         CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "codex_client_models.json", "models.dev"],
             providerModels: [
@@ -988,7 +985,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Runtime cache with empty sources (invalid per isValidSnapshot)
         let badSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: [],
             providerModels: [
@@ -999,7 +996,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Valid bundled snapshot for fallback
         let validBundled = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -1038,7 +1035,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Runtime cache with empty providerModels (invalid per isValidSnapshot)
         let badSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [:]
@@ -1047,7 +1044,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Valid bundled snapshot for fallback
         let validBundled = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -1083,7 +1080,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Runtime cache with one provider having an empty model array
         let badSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -1095,7 +1092,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Valid bundled snapshot for fallback
         let validBundled = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -1131,7 +1128,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Runtime cache with a model entry having empty ID
         let badSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -1145,7 +1142,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Valid bundled snapshot for fallback
         let validBundled = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -1181,7 +1178,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Invalid runtime cache: unknown sources
         let badSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["unknown-source"],
             providerModels: [
@@ -1192,7 +1189,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Valid bundled snapshot with different content
         let validBundled = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -1391,9 +1388,9 @@ final class ExternalModelCatalogTests: XCTestCase {
 
     // MARK: - Review Fix: Secondary Fills Missing Models for Partially-Covered Providers
 
-    func testMerge_secondaryFillsMissingModelsForPartiallyCoveredProvider() {
+    func testMerge_secondaryDoesNotFillModelsForPrimaryOnlyProvider() {
         // Primary covers codex with gpt-4o and o3
-        let partialPrimaryFixture: Data = """
+        let primaryFixture: Data = """
         {
             "codex-free": [
                 {"id": "gpt-4o", "object": "model", "created": 1700000002, "owned_by": "openai"}
@@ -1404,8 +1401,9 @@ final class ExternalModelCatalogTests: XCTestCase {
         }
         """.data(using: .utf8)!
 
-        // Secondary has codex models including gpt-4o-mini that primary does not cover
-        let secondaryWithExtraCodex: Data = """
+        // Secondary has openai models that would have mapped to codex under old policy.
+        // After policy change, openai is excluded from secondaryProviderMapping.
+        let secondaryWithOpenAI: Data = """
         {
             "openai": {
                 "models": {
@@ -1417,29 +1415,31 @@ final class ExternalModelCatalogTests: XCTestCase {
         }
         """.data(using: .utf8)!
 
-        let primary = ExternalModelCatalog.parseModelsJSON(partialPrimaryFixture)!
-        let secondary = ExternalModelCatalog.parseModelsDev(secondaryWithExtraCodex)!
+        let primary = ExternalModelCatalog.parseModelsJSON(primaryFixture)!
+
+        // openai is no longer in secondaryProviderMapping, so parseModelsDev returns nil
+        let secondary = ExternalModelCatalog.parseModelsDev(secondaryWithOpenAI)
+        XCTAssertNil(secondary,
+                     "openai must not map in secondaryProviderMapping after policy change")
 
         let merged = ExternalModelCatalog.mergeCatalogs(
             primary: primary,
             codexClient: nil,
-            secondary: secondary,
+            secondary: nil,
             clock: FakeClock(Date())
         )!
 
         let codexModels = merged.providerModels["codex"]!
         let codexIds = Set(codexModels.map { $0.id })
 
-        // Primary models must be preserved with primary owned_by
+        // Only primary models present — no secondary fill for primary-only provider
         XCTAssertTrue(codexIds.contains("gpt-4o"), "Primary gpt-4o must be present")
         XCTAssertTrue(codexIds.contains("o3"), "Primary o3 must be present")
+        XCTAssertFalse(codexIds.contains("gpt-4o-mini"),
+                       "gpt-4o-mini must not be filled from secondary for primary-only codex provider")
 
         let gpt4o = codexModels.first { $0.id == "gpt-4o" }!
-        XCTAssertEqual(gpt4o.ownedBy, "openai", "Primary model owned_by must be preserved, not replaced by secondary")
-
-        // Secondary fills missing model for partially covered provider
-        XCTAssertTrue(codexIds.contains("gpt-4o-mini"),
-                       "Secondary should fill missing model gpt-4o-mini for partially covered provider")
+        XCTAssertEqual(gpt4o.ownedBy, "openai", "Primary model owned_by must be preserved")
     }
 
     // MARK: - Review Fix: Codex Client Metadata Preserves Supplemental Fields
@@ -1510,13 +1510,13 @@ final class ExternalModelCatalogTests: XCTestCase {
         XCTAssertEqual(mapping["codex-team"], "codex")
         XCTAssertEqual(mapping["codex-plus"], "codex")
         XCTAssertEqual(mapping["codex-pro"], "codex")
-        XCTAssertEqual(mapping["kimi"], "kimi")
+        XCTAssertNil(mapping["kimi"], "kimi must not be in primaryProviderMapping — compatible providers are secondary-only")
     }
 
     func testSecondaryProviderMapping_exactMappings() {
         let mapping = ExternalModelCatalog.secondaryProviderMapping
-        XCTAssertEqual(mapping["claude"], "anthropic")
-        XCTAssertEqual(mapping["codex"], "openai")
+        XCTAssertNil(mapping["claude"], "claude must not be in secondaryProviderMapping — OAuth providers are primary-only")
+        XCTAssertNil(mapping["codex"], "codex must not be in secondaryProviderMapping — OAuth providers are primary-only")
         XCTAssertEqual(mapping["zai"], "zai-coding-plan")
         XCTAssertEqual(mapping["minimax"], "minimax-coding-plan")
         XCTAssertEqual(mapping["kimi"], "moonshotai")
@@ -2162,7 +2162,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         let result = coordinator.getCatalog()
         if case .available(let loaded) = result {
-            XCTAssertEqual(loaded.schemaVersion, "1")
+            XCTAssertEqual(loaded.schemaVersion, "2")
             XCTAssertGreaterThan(loaded.providerModels.count, 0)
         } else {
             XCTFail("Expected available snapshot from main-bundle resource URL")
@@ -2202,7 +2202,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Two snapshots with different generatedAt values to prove which one is loaded
         let mainSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["main-bundle"],
             providerModels: [
@@ -2210,7 +2210,7 @@ final class ExternalModelCatalogTests: XCTestCase {
             ]
         )
         let moduleSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-02T00:00:00Z",
             sources: ["module"],
             providerModels: [
@@ -2280,7 +2280,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Write a valid bundled snapshot with proper source metadata
         let validSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "codex_client_models.json", "models.dev"],
             providerModels: [
@@ -2446,7 +2446,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Write a snapshot with empty sources — should be rejected
         let badSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: [], // empty: invalid
             providerModels: [
@@ -2481,7 +2481,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Write a snapshot with only unknown sources — should be rejected
         let badSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["unknown-source", "another-bad-source"],
             providerModels: [
@@ -2516,7 +2516,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Write a snapshot with valid sources — should be accepted
         let validSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -2556,7 +2556,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Pre-existing valid snapshot
         let validSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "codex_client_models.json", "models.dev"],
             providerModels: [
@@ -2646,7 +2646,7 @@ final class ExternalModelCatalogTests: XCTestCase {
     /// Every provider must have a non-empty model array.
     func testStrictValidation_rejectsSnapshotWithOneProviderEmptyModels() {
         let snapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -2663,7 +2663,7 @@ final class ExternalModelCatalogTests: XCTestCase {
     /// Every model entry in every provider must have a non-empty ID.
     func testStrictValidation_rejectsSnapshotWithOneProviderHavingEmptyModelId() {
         let snapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -2679,7 +2679,7 @@ final class ExternalModelCatalogTests: XCTestCase {
     /// have non-empty model arrays and all model entries have non-empty IDs.
     func testStrictValidation_acceptsSnapshotWithAllProvidersValid() {
         let snapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -2694,7 +2694,7 @@ final class ExternalModelCatalogTests: XCTestCase {
     /// Verifies that strict validation rejects a snapshot with empty providerModels.
     func testStrictValidation_rejectsEmptyProviderModels() {
         let snapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json"],
             providerModels: [:]
@@ -2720,7 +2720,7 @@ final class ExternalModelCatalogTests: XCTestCase {
     /// Verifies that strict validation rejects a snapshot with invalid sources.
     func testStrictValidation_rejectsInvalidSources() {
         let snapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["unknown-source"],
             providerModels: [
@@ -2743,7 +2743,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Snapshot with one valid provider and one with empty models
         let badSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -2779,7 +2779,7 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         // Snapshot with one valid provider and one with empty model ID
         let badSnapshot = CatalogSnapshot(
-            schemaVersion: "1",
+            schemaVersion: "2",
             generatedAt: "2026-01-01T00:00:00Z",
             sources: ["models.json", "models.dev"],
             providerModels: [
@@ -2889,6 +2889,485 @@ final class ExternalModelCatalogTests: XCTestCase {
         let totalModels = snapshot.providerModels.values.reduce(0) { $0 + $1.count }
         XCTAssertGreaterThan(totalModels, 0,
                              "Bundled snapshot must contain at least one model entry")
+    }
+
+    // MARK: - Runtime Cache Policy Validation Tests (Task 2A)
+
+    /// Verifies that a stale runtime cache with old policy schema "1" is rejected
+    /// and falls back to the bundled snapshot with current policy schema "2".
+    /// This prevents old-policy runtime caches (e.g. ~/.cli-proxy-api/model-catalog-cache.json)
+    /// from exposing models.dev-only OAuth models after the source-policy update.
+    func testRuntimeCache_oldPolicySchemaRejected_fallsBackToBundled() {
+        let cacheDir = makeTempCacheDirectory()
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONError = NSError(domain: "test", code: 1)
+        fetcher.modelsDevError = NSError(domain: "test", code: 1)
+
+        // Stale runtime cache with old policy schema "1", models.dev source,
+        // and old-policy OAuth models including codex/gpt-4o-mini
+        let staleCache = CatalogSnapshot(
+            schemaVersion: "1",
+            generatedAt: "2026-01-01T00:00:00Z",
+            sources: ["models.json", "models.dev"],
+            providerModels: [
+                "claude": [CatalogModelEntry(id: "claude-sonnet-4", object: "model", created: 1, ownedBy: "anthropic", displayName: nil, tier: nil)],
+                "codex": [
+                    CatalogModelEntry(id: "gpt-4o", object: "model", created: 2, ownedBy: "openai", displayName: nil, tier: nil),
+                    CatalogModelEntry(id: "gpt-4o-mini", object: "model", created: 3, ownedBy: "openai", displayName: nil, tier: nil)
+                ]
+            ]
+        )
+        writeCacheSnapshot(staleCache, to: cacheDir, writtenAt: Date())
+
+        // Valid bundled snapshot with current policy schema "2" and no models.dev-only OAuth models
+        let validBundled = CatalogSnapshot(
+            schemaVersion: "2",
+            generatedAt: "2026-01-01T00:00:00Z",
+            sources: ["models.json", "codex_client_models.json", "models.dev"],
+            providerModels: [
+                "claude": [CatalogModelEntry(id: "claude-sonnet-4", object: "model", created: 1, ownedBy: "anthropic", displayName: nil, tier: nil)],
+                "codex": [CatalogModelEntry(id: "gpt-4o", object: "model", created: 2, ownedBy: "openai", displayName: nil, tier: nil)]
+            ]
+        )
+        let bundledURL = cacheDir.appendingPathComponent("bundled-snapshot.json")
+        writeBundledSnapshot(validBundled, to: bundledURL)
+
+        let coordinator = CacheCoordinator(
+            clock: FakeClock(Date()),
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: bundledURL
+        )
+
+        let result = coordinator.getCatalog()
+        if case .available(let snapshot) = result {
+            // Should serve the bundled snapshot (no gpt-4o-mini), not the stale cache
+            let codexIds = Set(snapshot.providerModels["codex"]?.map { $0.id } ?? [])
+            XCTAssertFalse(codexIds.contains("gpt-4o-mini"),
+                           "Stale old-policy cache must not serve models.dev-only codex/gpt-4o-mini")
+            XCTAssertNotNil(snapshot.providerModels["claude"],
+                           "Should serve bundled snapshot with claude provider")
+        } else {
+            XCTFail("Expected bundled snapshot to be served when stale runtime cache is rejected, got \(result)")
+        }
+    }
+
+    /// Verifies that a stale runtime cache with old policy schema "1" triggers
+    /// a refresh when possible, producing a snapshot without old-policy models.
+    func testRuntimeCache_oldPolicySchemaRejected_refreshesWhenPossible() {
+        let cacheDir = makeTempCacheDirectory()
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = Self.modelsJSONFixture
+        fetcher.modelsDevData = Self.modelsDevFixture
+
+        // Stale runtime cache with old policy schema "1" and old-policy OAuth models
+        let staleCache = CatalogSnapshot(
+            schemaVersion: "1",
+            generatedAt: "2026-01-01T00:00:00Z",
+            sources: ["models.json", "models.dev"],
+            providerModels: [
+                "claude": [CatalogModelEntry(id: "claude-sonnet-4", object: "model", created: 1, ownedBy: "anthropic", displayName: nil, tier: nil)],
+                "codex": [
+                    CatalogModelEntry(id: "gpt-4o", object: "model", created: 2, ownedBy: "openai", displayName: nil, tier: nil),
+                    CatalogModelEntry(id: "gpt-4o-mini", object: "model", created: 3, ownedBy: "openai", displayName: nil, tier: nil)
+                ]
+            ]
+        )
+        writeCacheSnapshot(staleCache, to: cacheDir, writtenAt: Date())
+
+        let coordinator = CacheCoordinator(
+            clock: FakeClock(Date()),
+            fetcher: fetcher,
+            cacheDirectory: cacheDir,
+            bundledSnapshotURL: nil
+        )
+
+        let result = coordinator.getCatalog()
+        if case .available(let snapshot) = result {
+            // Refreshed snapshot must not contain models.dev-only OAuth models
+            let codexIds = Set(snapshot.providerModels["codex"]?.map { $0.id } ?? [])
+            XCTAssertFalse(codexIds.contains("gpt-4o-mini"),
+                           "Refreshed snapshot must not contain models.dev-only codex/gpt-4o-mini")
+            // Compatible providers should still be present from models.dev
+            XCTAssertNotNil(snapshot.providerModels["zai"],
+                           "Refreshed snapshot should contain zai from models.dev")
+            XCTAssertNotNil(snapshot.providerModels["kimi"],
+                           "Refreshed snapshot should contain kimi from models.dev")
+        } else {
+            XCTFail("Expected refreshed snapshot after stale runtime cache rejection, got \(result)")
+        }
+    }
+
+    /// Verifies that isValidSnapshot accepts a snapshot with the current policy schema version.
+    func testSnapshotValidation_acceptsCurrentPolicySchema() {
+        let snapshot = CatalogSnapshot(
+            schemaVersion: "2",
+            generatedAt: "2026-01-01T00:00:00Z",
+            sources: ["models.json", "codex_client_models.json", "models.dev"],
+            providerModels: [
+                "claude": [CatalogModelEntry(id: "claude-sonnet-4", object: "model", created: 1, ownedBy: "anthropic", displayName: nil, tier: nil)],
+                "codex": [CatalogModelEntry(id: "gpt-4o", object: "model", created: 2, ownedBy: "openai", displayName: nil, tier: nil)]
+            ]
+        )
+        XCTAssertTrue(ExternalModelCatalog.isValidSnapshot(snapshot),
+                      "Snapshot with current policy schema should be accepted")
+    }
+
+    /// Verifies that isValidSnapshot rejects a snapshot with old policy schema "1".
+    func testSnapshotValidation_rejectsOldPolicySchema() {
+        let snapshot = CatalogSnapshot(
+            schemaVersion: "1",
+            generatedAt: "2026-01-01T00:00:00Z",
+            sources: ["models.json", "codex_client_models.json", "models.dev"],
+            providerModels: [
+                "claude": [CatalogModelEntry(id: "claude-sonnet-4", object: "model", created: 1, ownedBy: "anthropic", displayName: nil, tier: nil)],
+                "codex": [CatalogModelEntry(id: "gpt-4o", object: "model", created: 2, ownedBy: "openai", displayName: nil, tier: nil)]
+            ]
+        )
+        XCTAssertFalse(ExternalModelCatalog.isValidSnapshot(snapshot),
+                       "Snapshot with old policy schema '1' should be rejected")
+    }
+
+    /// Verifies that currentSchemaVersion is "2" (catalog source policy v0.3.1).
+    /// The standalone generator script must emit this same version.
+    /// If this test fails, the generator script likely needs a matching update.
+    func testCurrentSchemaVersionMatchesPolicyV0_3_1() {
+        XCTAssertEqual(ExternalModelCatalog.currentSchemaVersion, "2",
+                       "currentSchemaVersion must be '2' for catalog source policy v0.3.1")
+    }
+
+    /// Verifies that primaryProviderMapping does NOT contain kimi (removed in policy v0.3.1).
+    /// The standalone generator script's primaryProviderMapping must also exclude kimi.
+    func testPrimaryProviderMapping_excludesKimi() {
+        XCTAssertNil(ExternalModelCatalog.primaryProviderMapping["kimi"],
+                     "primaryProviderMapping must not contain 'kimi' — removed in policy v0.3.1")
+    }
+
+    /// Verifies that secondaryProviderMapping does NOT map claude→anthropic or codex→openai
+    /// (removed in policy v0.3.1 because these are OAuth-only providers).
+    /// The standalone generator script's secondaryProviderMapping must also exclude these.
+    func testSecondaryProviderMapping_excludesOAuthProviders() {
+        XCTAssertNil(ExternalModelCatalog.secondaryProviderMapping["claude"],
+                     "secondaryProviderMapping must not contain 'claude' — OAuth-only, removed in v0.3.1")
+        XCTAssertNil(ExternalModelCatalog.secondaryProviderMapping["codex"],
+                     "secondaryProviderMapping must not contain 'codex' — OAuth-only, removed in v0.3.1")
+    }
+
+    // MARK: - Catalog Source Policy Tests (Task 1)
+
+    /// Verifies that secondaryProviderMapping excludes OAuth providers (claude, codex)
+    /// and retains only compatible/API-key providers (zai, minimax, kimi, opencode-go).
+    /// RED: Currently fails because secondaryProviderMapping still maps claude→anthropic and codex→openai.
+    func testProviderSourcePolicy_secondaryMappingExcludesOAuthProviders() {
+        let mapping = ExternalModelCatalog.secondaryProviderMapping
+
+        // OAuth providers must NOT appear in secondary mapping
+        XCTAssertNil(mapping["claude"],
+                     "claude must not be in secondaryProviderMapping — OAuth providers are primary-only")
+        XCTAssertNil(mapping["codex"],
+                     "codex must not be in secondaryProviderMapping — OAuth providers are primary-only")
+
+        // Compatible/API-key providers must still be mapped to models.dev keys
+        XCTAssertEqual(mapping["zai"], "zai-coding-plan",
+                       "zai must map to zai-coding-plan in secondaryProviderMapping")
+        XCTAssertEqual(mapping["minimax"], "minimax-coding-plan",
+                       "minimax must map to minimax-coding-plan in secondaryProviderMapping")
+        XCTAssertEqual(mapping["kimi"], "moonshotai",
+                       "kimi must map to moonshotai in secondaryProviderMapping")
+        XCTAssertEqual(mapping["opencode-go"], "opencode-go",
+                       "opencode-go must map to opencode-go in secondaryProviderMapping")
+    }
+
+    /// Verifies that a models.dev-only fixture containing anthropic and openai providers
+    /// does not expose claude/ or codex/ models after merge and filter.
+    /// RED: Currently fails because parseModelsDev maps anthropic→claude and openai→codex
+    /// via secondaryProviderMapping, producing claude/ and codex/ models.
+    /// GREEN path: after removing claude/codex from secondaryProviderMapping, parseModelsDev
+    /// returns nil for this fixture (no reverse-mapped providers), so no OAuth models emerge.
+    func testProviderSourcePolicy_modelsDevOnlyFixtureDoesNotExposeOAuthProviders() {
+        let oauthOnlyFixture: Data = """
+        {
+            "anthropic": {
+                "models": {
+                    "claude-sonnet-4": {"owned_by": "anthropic"},
+                    "claude-opus-4": {"owned_by": "anthropic"}
+                }
+            },
+            "openai": {
+                "models": {
+                    "gpt-4o-mini": {"owned_by": "openai"}
+                }
+            }
+        }
+        """.data(using: .utf8)!
+
+        // If parseModelsDev returns nil, the fixture has no mappable providers —
+        // trivially no OAuth models can be produced. No merge/filter needed.
+        guard let secondary = ExternalModelCatalog.parseModelsDev(oauthOnlyFixture) else {
+            // Desired GREEN behavior: OAuth-only providers are not in secondaryProviderMapping,
+            // so parseModelsDev produces no valid providers → returns nil.
+            return
+        }
+
+        // RED path: parseModelsDev did map the OAuth providers, so verify the merged/filtered
+        // output does not expose them.
+        let connected: Set<String> = ["claude", "codex"]
+        let filtered: [CatalogModel]
+        if let merged = ExternalModelCatalog.mergeCatalogs(
+            primary: nil,
+            codexClient: nil,
+            secondary: secondary,
+            clock: FakeClock(Date())
+        ) {
+            filtered = ExternalModelCatalog.filterCatalog(
+                snapshot: merged,
+                connectedProviders: connected
+            )
+        } else {
+            filtered = []
+        }
+
+        for model in filtered {
+            XCTAssertFalse(model.id.hasPrefix("claude/"),
+                           "Models.dev-only OAuth fixture must not produce claude/ models: \(model.id)")
+            XCTAssertFalse(model.id.hasPrefix("codex/"),
+                           "Models.dev-only OAuth fixture must not produce codex/ models: \(model.id)")
+        }
+    }
+
+    /// Verifies that primary registry alone does not expose kimi/ models
+    /// when models.dev secondary source is absent. kimi is a compatible/API-key
+    /// provider that should only come through models.dev secondary mapping.
+    /// RED: Currently fails because primaryProviderMapping includes "kimi"→"kimi",
+    /// so models.json kimi entries are exposed through primary merge.
+    func testProviderSourcePolicy_primaryRegistryDoesNotExposeCompatibleApiKeyKimiWithoutModelsDev() {
+        let primary = ExternalModelCatalog.parseModelsJSON(Self.modelsJSONFixture)!
+        let merged = ExternalModelCatalog.mergeCatalogs(
+            primary: primary,
+            codexClient: nil,
+            secondary: nil,
+            clock: FakeClock(Date())
+        )!
+
+        let connected: Set<String> = ["kimi"]
+        let filtered = ExternalModelCatalog.filterCatalog(
+            snapshot: merged,
+            connectedProviders: connected
+        )
+
+        for model in filtered {
+            XCTAssertFalse(model.id.hasPrefix("kimi/"),
+                           "Primary registry alone must not expose kimi/ models without models.dev: \(model.id)")
+        }
+    }
+
+    /// Verifies that merging all sources does not add models.dev-only OAuth models.
+    /// Claude IDs must be exactly claude-opus-4 and claude-sonnet-4 (from primary only),
+    /// and codex IDs must not include gpt-4o-mini (models.dev-only model).
+    /// RED: Currently fails because secondary fills gpt-4o-mini into codex.
+    func testProviderSourcePolicy_mergeDoesNotAddModelsDevOnlyOAuthModels() {
+        let primary = ExternalModelCatalog.parseModelsJSON(Self.modelsJSONFixture)!
+        let codexClient = ExternalModelCatalog.parseCodexClientModels(Self.codexClientFixture)!
+        let secondary = ExternalModelCatalog.parseModelsDev(Self.modelsDevFixture)!
+
+        let merged = ExternalModelCatalog.mergeCatalogs(
+            primary: primary,
+            codexClient: codexClient,
+            secondary: secondary,
+            clock: FakeClock(Date())
+        )!
+
+        // Claude IDs must be exactly from primary only
+        let claudeIds = Set(merged.providerModels["claude"]?.map { $0.id } ?? [])
+        XCTAssertEqual(claudeIds, Set(["claude-opus-4", "claude-sonnet-4"]),
+                       "Claude model IDs must be exactly claude-opus-4 and claude-sonnet-4, got: \(claudeIds.sorted())")
+
+        // Codex IDs must NOT include models.dev-only gpt-4o-mini
+        let codexIds = Set(merged.providerModels["codex"]?.map { $0.id } ?? [])
+        XCTAssertFalse(codexIds.contains("gpt-4o-mini"),
+                       "Codex models must not include models.dev-only gpt-4o-mini, got: \(codexIds.sorted())")
+    }
+
+    /// Verifies that compatible/API-key providers still use models.dev after policy change.
+    /// Guard test: this should pass with current production to confirm existing good behavior.
+    func testProviderSourcePolicy_compatibleProvidersStillUseModelsDev() {
+        let primary = ExternalModelCatalog.parseModelsJSON(Self.modelsJSONFixture)!
+        let codexClient = ExternalModelCatalog.parseCodexClientModels(Self.codexClientFixture)!
+        let secondary = ExternalModelCatalog.parseModelsDev(Self.modelsDevFixture)!
+
+        let merged = ExternalModelCatalog.mergeCatalogs(
+            primary: primary,
+            codexClient: codexClient,
+            secondary: secondary,
+            clock: FakeClock(Date())
+        )!
+
+        let connected: Set<String> = ["claude", "codex", "kimi", "zai", "minimax", "opencode-go"]
+        let filtered = ExternalModelCatalog.filterCatalog(
+            snapshot: merged,
+            connectedProviders: connected
+        )
+
+        let filteredIds = Set(filtered.map { $0.id })
+        XCTAssertTrue(filteredIds.contains("zai/glm-5.1"),
+                       "zai/glm-5.1 must be present after filtering all providers")
+        XCTAssertTrue(filteredIds.contains("zai/glm-5"),
+                       "zai/glm-5 must be present after filtering all providers")
+        XCTAssertTrue(filteredIds.contains("minimax/MiniMax-M2.7"),
+                       "minimax/MiniMax-M2.7 must be present after filtering all providers")
+        XCTAssertTrue(filteredIds.contains("kimi/kimi-k2"),
+                       "kimi/kimi-k2 must be present after filtering all providers")
+        XCTAssertTrue(filteredIds.contains("opencode-go/kimi-k2.6"),
+                       "opencode-go/kimi-k2.6 must be present after filtering all providers")
+    }
+
+    /// Verifies that merged providerModels does not contain grok or xai providers.
+    /// Guard test: confirms no unintended provider leakage from fixture or mapping changes.
+    func testProviderSourcePolicy_noGrokOrXaiProviderAdded() {
+        let primary = ExternalModelCatalog.parseModelsJSON(Self.modelsJSONFixture)!
+        let codexClient = ExternalModelCatalog.parseCodexClientModels(Self.codexClientFixture)!
+        let secondary = ExternalModelCatalog.parseModelsDev(Self.modelsDevFixture)!
+
+        let merged = ExternalModelCatalog.mergeCatalogs(
+            primary: primary,
+            codexClient: codexClient,
+            secondary: secondary,
+            clock: FakeClock(Date())
+        )!
+
+        XCTAssertNil(merged.providerModels["grok"],
+                     "grok provider must not be present in merged catalog")
+        XCTAssertNil(merged.providerModels["xai"],
+                     "xai provider must not be present in merged catalog")
+    }
+
+    // MARK: - Source URL Policy Tests (Task 0)
+
+    /// Derives the SwiftPM package root and repository root from the test file path.
+    /// Walks parent directories from #filePath until finding Package.swift;
+    /// that directory is the package root (src), and its parent is the repo root.
+    private static let packageRoot: URL = {
+        var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while dir.path != "/" {
+            let candidate = dir.appendingPathComponent("Package.swift")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return dir
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        fatalError("Could not find Package.swift walking up from \(#filePath)")
+    }()
+
+    private static let repoRoot: URL = packageRoot.deletingLastPathComponent()
+
+    /// Reads the source text of a file as a String for URL pattern assertions.
+    private static func readSourceText(at url: URL) -> String {
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8) else {
+            fatalError("Could not read source file at \(url.path)")
+        }
+        return text
+    }
+
+    func testProviderSourcePolicy_snapshotGeneratorPinsCLIProxyAPISourcesToApprovedCommit() {
+        let generatorPath = Self.repoRoot
+            .appendingPathComponent("scripts/generate-model-catalog-snapshot.swift")
+        let source = Self.readSourceText(at: generatorPath)
+
+        let approvedCommit = "5753d1a0896fd5bb9ace47adb17b0174ceb79e4d"
+
+        // Approved commit URLs must be present for both models.json and codex_client_models.json
+        let approvedModelsURL = "CLIProxyAPI/\(approvedCommit)/internal/registry/models/models.json"
+        let approvedCodexURL = "CLIProxyAPI/\(approvedCommit)/internal/registry/models/codex_client_models.json"
+        XCTAssertTrue(source.contains(approvedModelsURL),
+                      "Generator must pin models.json to approved commit: \(approvedModelsURL)")
+        XCTAssertTrue(source.contains(approvedCodexURL),
+                      "Generator must pin codex_client_models.json to approved commit: \(approvedCodexURL)")
+
+        // CLIProxyAPI/main URLs must NOT be present for either source
+        let forbiddenModelsURL = "CLIProxyAPI/main/internal/registry/models/models.json"
+        let forbiddenCodexURL = "CLIProxyAPI/main/internal/registry/models/codex_client_models.json"
+        XCTAssertFalse(source.contains(forbiddenModelsURL),
+                       "Generator must not default models.json to CLIProxyAPI/main: \(forbiddenModelsURL)")
+        XCTAssertFalse(source.contains(forbiddenCodexURL),
+                       "Generator must not default codex_client_models.json to CLIProxyAPI/main: \(forbiddenCodexURL)")
+    }
+
+    func testProviderSourcePolicy_productionFetcherPinsCLIProxyAPISourcesToApprovedCommit() {
+        let productionPath = Self.packageRoot
+            .appendingPathComponent("Sources/ExternalModelCatalog.swift")
+        let source = Self.readSourceText(at: productionPath)
+
+        let approvedCommit = "5753d1a0896fd5bb9ace47adb17b0174ceb79e4d"
+
+        // Approved commit URLs must be present in URLSessionCatalogFetcher
+        let approvedModelsURL = "CLIProxyAPI/\(approvedCommit)/internal/registry/models/models.json"
+        let approvedCodexURL = "CLIProxyAPI/\(approvedCommit)/internal/registry/models/codex_client_models.json"
+        XCTAssertTrue(source.contains(approvedModelsURL),
+                      "Production URLSessionCatalogFetcher must pin models.json to approved commit: \(approvedModelsURL)")
+        XCTAssertTrue(source.contains(approvedCodexURL),
+                      "Production URLSessionCatalogFetcher must pin codex_client_models.json to approved commit: \(approvedCodexURL)")
+
+        // CLIProxyAPI/main URLs must NOT be present
+        let forbiddenModelsURL = "CLIProxyAPI/main/internal/registry/models/models.json"
+        let forbiddenCodexURL = "CLIProxyAPI/main/internal/registry/models/codex_client_models.json"
+        XCTAssertFalse(source.contains(forbiddenModelsURL),
+                       "Production must not default models.json to CLIProxyAPI/main: \(forbiddenModelsURL)")
+        XCTAssertFalse(source.contains(forbiddenCodexURL),
+                       "Production must not default codex_client_models.json to CLIProxyAPI/main: \(forbiddenCodexURL)")
+    }
+
+    /// Reads the standalone generator script source text for source-level assertions.
+    /// Uses the same repo-root resolution as the CLIProxyAPI pin tests.
+    private static func readGeneratorSource() -> String {
+        let generatorPath = repoRoot
+            .appendingPathComponent("scripts/generate-model-catalog-snapshot.swift")
+        return readSourceText(at: generatorPath)
+    }
+
+    /// Verifies that the standalone snapshot generator's provider mappings match the
+    /// production ExternalModelCatalog policy (v0.3.1). Checks:
+    ///   - Generator does NOT contain removed mappings: "claude"→"anthropic",
+    ///     "codex"→"openai" (secondary), or "kimi"→"kimi" (primary).
+    ///   - Generator DOES contain compatible secondary mappings: zai, minimax, kimi→moonshotai,
+    ///     opencode-go.
+    ///   - Generator emits schemaVersion "2" and does NOT emit schemaVersion "1"
+    ///     in the current snapshot creation paths.
+    func testProviderSourcePolicy_snapshotGeneratorMappingsMatchProductionPolicy() {
+        let source = Self.readGeneratorSource()
+
+        // --- Removed primary mapping: kimi → kimi ---
+        XCTAssertFalse(source.contains("\"kimi\": \"kimi\""),
+                       "Generator primaryProviderMapping must not contain '\"kimi\": \"kimi\"' — removed in v0.3.1")
+
+        // --- Removed secondary mappings: claude → anthropic, codex → openai ---
+        XCTAssertFalse(source.contains("\"claude\": \"anthropic\""),
+                       "Generator secondaryProviderMapping must not contain '\"claude\": \"anthropic\"' — removed in v0.3.1")
+        XCTAssertFalse(source.contains("\"codex\": \"openai\""),
+                       "Generator secondaryProviderMapping must not contain '\"codex\": \"openai\"' — removed in v0.3.1")
+
+        // --- Required compatible secondary mappings ---
+        XCTAssertTrue(source.contains("\"zai\": \"zai-coding-plan\""),
+                      "Generator secondaryProviderMapping must contain '\"zai\": \"zai-coding-plan\"'")
+        XCTAssertTrue(source.contains("\"minimax\": \"minimax-coding-plan\""),
+                      "Generator secondaryProviderMapping must contain '\"minimax\": \"minimax-coding-plan\"'")
+        XCTAssertTrue(source.contains("\"kimi\": \"moonshotai\""),
+                      "Generator secondaryProviderMapping must contain '\"kimi\": \"moonshotai\"'")
+        XCTAssertTrue(source.contains("\"opencode-go\": \"opencode-go\""),
+                      "Generator secondaryProviderMapping must contain '\"opencode-go\": \"opencode-go\"'")
+
+        // --- Schema version: generator must emit "2", must not emit "1" in snapshot creation ---
+        // The generator creates snapshots with CatalogSnapshot(schemaVersion: ...) in two places.
+        // Both must use "2".
+        // Check that schemaVersion: "2" appears at least twice (temporary comparison + final output)
+        let schema2Count = source.components(separatedBy: "schemaVersion: \"2\"").count - 1
+        XCTAssertGreaterThanOrEqual(schema2Count, 2,
+                      "Generator must emit schemaVersion \"2\" in at least 2 snapshot creation sites (comparison + final), found \(schema2Count)")
+
+        // schemaVersion: "1" must NOT appear in snapshot creation (only in test data if any)
+        let schema1Count = source.components(separatedBy: "schemaVersion: \"1\"").count - 1
+        XCTAssertEqual(schema1Count, 0,
+                       "Generator must not contain schemaVersion \"1\" in any path — found \(schema1Count) occurrences")
     }
 }
 

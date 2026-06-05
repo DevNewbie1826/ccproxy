@@ -730,7 +730,7 @@ final class ServerManagerConfigTests: XCTestCase {
             }
         }
         let snapshot: [String: Any] = [
-            "schemaVersion": "1",
+            "schemaVersion": "2",
             "generatedAt": "2026-06-05T00:00:00Z",
             "sources": ["models.json"],
             "providerModels": snapshotModels
