@@ -179,7 +179,7 @@ Do not modify:
       raise SystemExit('PNG signature mismatch')
   print(f'{p} {len(data)} bytes')
   PY
-  swift <<'SWIFT'
+  swift - <<'SWIFT'
 import AppKit
 struct ExpectedPixel {
     let x: Int
