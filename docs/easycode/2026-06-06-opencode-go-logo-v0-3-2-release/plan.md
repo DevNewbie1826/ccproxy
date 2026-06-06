@@ -498,13 +498,13 @@ SWIFT
 
   Expected result: GitHub returns the PR URL.
 
-- [ ] Merge the PR after required checks/reviews are satisfied:
+- [ ] Merge the PR after required checks/reviews are satisfied, without deleting the branch while the EasyCode worktree still checks it out:
 
   ```bash
-  gh pr merge --repo DevNewbie1826/ccproxy --merge --delete-branch
+  cd /Volumes/storage/workspace/ccproxy && FINAL_REVIEWED_HEAD_SHA="${FINAL_REVIEWED_HEAD_SHA:?set to the final-reviewed feature HEAD SHA from final-review PASS}" && PR_NUMBER="${PR_NUMBER:-$(gh pr list --repo DevNewbie1826/ccproxy --head work/2026-06-06-opencode-go-logo-v0-3-2-release --base main --state open --json number --jq '.[0].number')}" && test -n "$PR_NUMBER" && PR_HEAD_SHA="$(gh pr view "$PR_NUMBER" --repo DevNewbie1826/ccproxy --json headRefOid --jq '.headRefOid')" && printf 'PR_NUMBER=%s\nPR_HEAD_SHA=%s\nFINAL_REVIEWED_HEAD_SHA=%s\n' "$PR_NUMBER" "$PR_HEAD_SHA" "$FINAL_REVIEWED_HEAD_SHA" && test "$PR_HEAD_SHA" = "$FINAL_REVIEWED_HEAD_SHA" && gh pr merge "$PR_NUMBER" --repo DevNewbie1826/ccproxy --merge --match-head-commit "$FINAL_REVIEWED_HEAD_SHA"
   ```
 
-  Expected result: PR merged and remote feature branch deleted by GitHub. If repository policy requires squash or rebase instead of merge, stop for finish-choice routing before changing merge method.
+  Expected result: running from the root checkout, the command resolves an explicit PR selector from `PR_NUMBER` or the approved feature branch, prints `PR_HEAD_SHA` and `FINAL_REVIEWED_HEAD_SHA`, verifies they match, and merges that PR using `--match-head-commit "$FINAL_REVIEWED_HEAD_SHA"`. The command intentionally omits `--delete-branch`; the remote feature branch must remain until after merge verification, release verification, EasyCode worktree removal, and local branch deletion. If the PR head changed, `--match-head-commit` fails, repository policy requires squash or rebase instead of merge, or the command is not run from `/Volumes/storage/workspace/ccproxy`, stop for finish-choice routing before changing merge method.
 
 - [ ] Update local `main` from the root checkout, protecting the known dirty root `.gitignore`:
 
@@ -546,13 +546,13 @@ SWIFT
 
   Expected result: the same shell invocation recomputes `MERGED_RELEASE_SHA` from local `main`, confirms local `main` is at that SHA, confirms the local annotated tag target `v0.3.2^{}` equals that SHA, confirms the mandatory remote peeled tag target `refs/tags/v0.3.2^{}` equals that SHA, confirms GitHub Release `v0.3.2` exists, and confirms the remote asset size equals the local staged archive size. If the remote peeled tag target is missing or differs from `MERGED_RELEASE_SHA`, stop before cleanup.
 
-- [ ] Clean up only EasyCode-owned worktree and local feature branch after release verification:
+- [ ] Clean up only the EasyCode-owned worktree, local feature branch, and remote feature branch after merge and release verification:
 
   ```bash
-  cd /Volumes/storage/workspace/ccproxy && git worktree remove "/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-opencode-go-logo-v0-3-2-release" && git branch -d work/2026-06-06-opencode-go-logo-v0-3-2-release
+  cd /Volumes/storage/workspace/ccproxy && git worktree remove "/Volumes/storage/workspace/ccproxy/.worktrees/2026-06-06-opencode-go-logo-v0-3-2-release" && git branch -d work/2026-06-06-opencode-go-logo-v0-3-2-release && git push origin --delete work/2026-06-06-opencode-go-logo-v0-3-2-release
   ```
 
-  Expected result: EasyCode worktree is removed and local feature branch is deleted. Do not delete unrelated branches or touch root `.gitignore`.
+  Expected result: from the root checkout after release verification has passed, the EasyCode worktree is removed first, the local feature branch is deleted second, and the remote feature branch is deleted last. Stop if worktree removal reports uncommitted changes or if local branch deletion fails; do not delete the remote branch until the worktree is gone and the local branch deletion has succeeded. Do not delete unrelated branches or touch root `.gitignore`.
 
 ## Stop Conditions
 
@@ -566,4 +566,6 @@ SWIFT
 - Stop if archive regeneration changes `CCProxy.app.zip` after `appcast.xml` was signed and committed; update the staged archive, regenerate signature/length, recommit `appcast.xml`, and reverify before review.
 - Stop if Sparkle public key validation cannot be performed without exposing private key material.
 - Stop if the archive source commit and merged release SHA differ by anything other than the final-review artifact.
+- Stop if PR merge is attempted without an explicit PR selector, without `--match-head-commit "$FINAL_REVIEWED_HEAD_SHA"`, with `--delete-branch`, or from anywhere other than `/Volumes/storage/workspace/ccproxy`.
+- Stop if remote feature branch deletion is attempted before merge/release verification, before removing the EasyCode worktree, or before deleting the local feature branch.
 - Stop if git status contains unrelated files, generated `.app`/`.zip`, external release artifacts, Sparkle keys, or source changes not named in this plan.
