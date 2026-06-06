@@ -1,6 +1,20 @@
 import SwiftUI
 import ServiceManagement
 
+/// Maps service types to their bundled provider icon filenames.
+enum ProviderIconNames {
+    static func iconName(for serviceType: ServiceType) -> String {
+        switch serviceType {
+        case .claude: return "icon-claude.png"
+        case .codex: return "icon-codex.png"
+        case .zai: return "icon-zai.png"
+        case .minimax: return "icon-minimax.png"
+        case .kimi: return "icon-kimi.png"
+        case .opencodeGo: return "icon-opencode-go.png"
+        }
+    }
+}
+
 /// A single account row with disable toggle and remove button
 struct AccountRowView: View {
     let account: AuthAccount
@@ -354,7 +368,7 @@ struct SettingsView: View {
                 Section("Services") {
                     ServiceRow(
                         serviceType: .claude,
-                        iconName: "icon-claude.png",
+                        iconName: ProviderIconNames.iconName(for: .claude),
                         accounts: authManager.accounts(for: .claude),
                         isAuthenticating: authenticatingService == .claude,
                         helpText: nil,
@@ -372,7 +386,7 @@ struct SettingsView: View {
 
                     ServiceRow(
                         serviceType: .codex,
-                        iconName: "icon-codex.png",
+                        iconName: ProviderIconNames.iconName(for: .codex),
                         accounts: authManager.accounts(for: .codex),
                         isAuthenticating: authenticatingService == .codex,
                         helpText: nil,
@@ -388,7 +402,7 @@ struct SettingsView: View {
 
                     ServiceRow(
                         serviceType: .zai,
-                        iconName: "icon-zai.png",
+                        iconName: ProviderIconNames.iconName(for: .zai),
                         accounts: authManager.accounts(for: .zai),
                         isAuthenticating: authenticatingService == .zai,
                         helpText: "Z.AI GLM provides access to GLM-4.7 and other models via API key. Get your key at https://z.ai/manage-apikey/apikey-list",
@@ -404,7 +418,7 @@ struct SettingsView: View {
 
                     ServiceRow(
                         serviceType: .minimax,
-                        iconName: "icon-minimax.png",
+                        iconName: ProviderIconNames.iconName(for: .minimax),
                         accounts: authManager.accounts(for: .minimax),
                         isAuthenticating: authenticatingService == .minimax,
                         helpText: "MiniMax provides access to Claude-compatible models via API key. Get your key at https://platform.minimaxi.com",
@@ -420,7 +434,7 @@ struct SettingsView: View {
 
                     ServiceRow(
                         serviceType: .kimi,
-                        iconName: "icon-kimi.png",
+                        iconName: ProviderIconNames.iconName(for: .kimi),
                         accounts: authManager.accounts(for: .kimi),
                         isAuthenticating: authenticatingService == .kimi,
                         helpText: "Kimi provides access to Moonshot AI models via API key.",
@@ -436,7 +450,7 @@ struct SettingsView: View {
 
                     ServiceRow(
                         serviceType: .opencodeGo,
-                        iconName: "",
+                        iconName: ProviderIconNames.iconName(for: .opencodeGo),
                         accounts: authManager.accounts(for: .opencodeGo),
                         isAuthenticating: authenticatingService == .opencodeGo,
                         helpText: "OpenCode Go provides low-cost coding models via subscription. Get your key at https://opencode.ai/ko/go",
