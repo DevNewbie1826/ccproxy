@@ -28,6 +28,13 @@ enum ExternalModelCatalog {
         "opencode-go": "opencode-go"
     ]
 
+    private static let providerQualifiedModelIDProviders: Set<String> = [
+        "zai",
+        "minimax",
+        "kimi",
+        "opencode-go"
+    ]
+
     // MARK: - Config Model Name Extraction
 
     /// Extracts model name arrays keyed by CCProxy provider ID from a snapshot,
@@ -382,7 +389,6 @@ enum ExternalModelCatalog {
     // MARK: - Filter
 
     /// Filter catalog to only include models for connected providers.
-    /// Provider-qualifies each model ID: "{provider}/{model_id}".
     /// Never infers connectivity from catalog presence.
     static func filterCatalog(
         snapshot: CatalogSnapshot,
@@ -400,9 +406,11 @@ enum ExternalModelCatalog {
                 } else {
                     modelId = entry.id
                 }
-                let qualifiedId = "\(provider)/\(modelId)"
+                let responseId = providerQualifiedModelIDProviders.contains(provider)
+                    ? "\(provider)/\(modelId)"
+                    : modelId
                 let model = CatalogModel(
-                    id: qualifiedId,
+                    id: responseId,
                     object: entry.object,
                     created: entry.created,
                     ownedBy: entry.ownedBy,

@@ -461,8 +461,8 @@ final class ExternalModelCatalogTests: XCTestCase {
         )
 
         for model in filtered {
-            XCTAssertFalse(model.id.hasPrefix("claude/"))
-            XCTAssertFalse(model.id.hasPrefix("codex/"))
+            XCTAssertFalse(model.id.hasPrefix("claude-"))
+            XCTAssertFalse(model.id == "gpt-4o" || model.id == "o3")
         }
     }
 
@@ -483,8 +483,8 @@ final class ExternalModelCatalogTests: XCTestCase {
         )
 
         for model in filtered {
-            XCTAssertFalse(model.id.hasPrefix("claude/"))
-            XCTAssertFalse(model.id.hasPrefix("codex/"))
+            XCTAssertFalse(model.id.hasPrefix("claude-"))
+            XCTAssertFalse(model.id == "gpt-4o" || model.id == "o3")
         }
 
         XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("zai/") }))
@@ -528,12 +528,49 @@ final class ExternalModelCatalogTests: XCTestCase {
             connectedProviders: connected
         )
 
-        XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("claude/") }))
-        XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("codex/") }))
+        XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("claude-") }))
+        XCTAssertTrue(filtered.contains(where: { $0.id == "gpt-4o" || $0.id == "o3" }))
         XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("zai/") }))
         XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("minimax/") }))
         XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("kimi/") }))
         XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("opencode-go/") }))
+    }
+
+    func testFilter_oauthProviderModelIDsAreUnqualifiedForBackendCompatibility() {
+        let snapshot = CatalogSnapshot(
+            schemaVersion: ExternalModelCatalog.currentSchemaVersion,
+            generatedAt: "2026-06-12T00:00:00Z",
+            sources: ["models.json"],
+            providerModels: [
+                "claude": [
+                    CatalogModelEntry(id: "claude-sonnet-4", object: "model", created: 1, ownedBy: "anthropic", displayName: nil, tier: nil),
+                    CatalogModelEntry(id: "claude/claude-opus-4", object: "model", created: 2, ownedBy: "anthropic", displayName: nil, tier: nil)
+                ],
+                "codex": [
+                    CatalogModelEntry(id: "gpt-5.5", object: "model", created: 3, ownedBy: "openai", displayName: nil, tier: nil),
+                    CatalogModelEntry(id: "codex/gpt-5.4", object: "model", created: 4, ownedBy: "openai", displayName: nil, tier: nil)
+                ],
+                "opencode-go": [
+                    CatalogModelEntry(id: "kimi-k2.6", object: "model", created: 5, ownedBy: "opencode-go", displayName: nil, tier: nil)
+                ]
+            ]
+        )
+
+        let filtered = ExternalModelCatalog.filterCatalog(
+            snapshot: snapshot,
+            connectedProviders: ["claude", "codex", "opencode-go"]
+        )
+        let ids = Set(filtered.map(\.id))
+
+        XCTAssertTrue(ids.contains("claude-sonnet-4"))
+        XCTAssertTrue(ids.contains("claude-opus-4"))
+        XCTAssertTrue(ids.contains("gpt-5.5"))
+        XCTAssertTrue(ids.contains("gpt-5.4"))
+        XCTAssertTrue(ids.contains("opencode-go/kimi-k2.6"))
+        XCTAssertFalse(ids.contains("claude/claude-sonnet-4"))
+        XCTAssertFalse(ids.contains("claude/claude-opus-4"))
+        XCTAssertFalse(ids.contains("codex/gpt-5.5"))
+        XCTAssertFalse(ids.contains("codex/gpt-5.4"))
     }
 
     func testFilter_openCodeGoProviderQualifiedIdsExactlyOnce() {
@@ -1538,37 +1575,19 @@ final class ExternalModelCatalogTests: XCTestCase {
             snapshot: merged, connectedProviders: connected
         )
 
-        // Verify providers appear in alphabetical order
-        var seenProviders: [String] = []
-        for model in filtered {
-            let provider = model.id.components(separatedBy: "/").first!
-            if seenProviders.last != provider {
-                seenProviders.append(provider)
-            }
-        }
-        XCTAssertEqual(seenProviders, seenProviders.sorted(),
-                       "Providers should appear in alphabetical order: \(seenProviders)")
-
-        // Verify models within each provider are sorted by ID
-        var currentProvider = ""
-        var currentProviderModelIds: [String] = []
-        for model in filtered {
-            let provider = model.id.components(separatedBy: "/").first!
-            let modelId = String(model.id.dropFirst(provider.count + 1))
-            if provider != currentProvider {
-                if !currentProviderModelIds.isEmpty {
-                    XCTAssertEqual(currentProviderModelIds, currentProviderModelIds.sorted(),
-                                   "Models within '\(currentProvider)' should be sorted by ID: \(currentProviderModelIds)")
-                }
-                currentProvider = provider
-                currentProviderModelIds = []
-            }
-            currentProviderModelIds.append(modelId)
-        }
-        if !currentProviderModelIds.isEmpty {
-            XCTAssertEqual(currentProviderModelIds, currentProviderModelIds.sorted(),
-                           "Models within '\(currentProvider)' should be sorted by ID: \(currentProviderModelIds)")
-        }
+        let ids = filtered.map(\.id)
+        XCTAssertEqual(ids, [
+            "claude-opus-4",
+            "claude-sonnet-4",
+            "gpt-4o",
+            "o3",
+            "kimi/kimi-k2",
+            "minimax/MiniMax-M2.7",
+            "opencode-go/claude-sonnet-4",
+            "opencode-go/kimi-k2.6",
+            "zai/glm-5",
+            "zai/glm-5.1"
+        ])
     }
 
     func testDeterministicCodexDuplicateTierPrecedence() {
@@ -1933,7 +1952,7 @@ final class ExternalModelCatalogTests: XCTestCase {
         let result = provider.fetchCatalogModels()
         if case .available(let models) = result {
             XCTAssertFalse(models.isEmpty)
-            let claudeModels = models.filter { $0.id.hasPrefix("claude/") }
+            let claudeModels = models.filter { $0.id.hasPrefix("claude-") }
             let zaiModels = models.filter { $0.id.hasPrefix("zai/") }
             let ocGoModels = models.filter { $0.id.hasPrefix("opencode-go/") }
             XCTAssertFalse(claudeModels.isEmpty, "Should have Claude models")
@@ -3128,10 +3147,10 @@ final class ExternalModelCatalogTests: XCTestCase {
         }
 
         for model in filtered {
-            XCTAssertFalse(model.id.hasPrefix("claude/"),
-                           "Models.dev-only OAuth fixture must not produce claude/ models: \(model.id)")
-            XCTAssertFalse(model.id.hasPrefix("codex/"),
-                           "Models.dev-only OAuth fixture must not produce codex/ models: \(model.id)")
+            XCTAssertFalse(model.id.hasPrefix("claude-"),
+                           "Models.dev-only OAuth fixture must not produce claude models: \(model.id)")
+            XCTAssertFalse(model.id == "gpt-4o-mini",
+                           "Models.dev-only OAuth fixture must not produce codex models: \(model.id)")
         }
     }
 
