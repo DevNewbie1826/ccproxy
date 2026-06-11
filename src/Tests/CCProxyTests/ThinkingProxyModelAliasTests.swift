@@ -481,8 +481,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
     /// Catalog models fixture representing two connected providers.
     private var catalogModelsFixture: [CatalogModel] {
         [
-            CatalogModel(id: "claude/claude-sonnet-4", object: "model", created: 1700000000, ownedBy: "anthropic", displayName: nil, tier: nil, sourceProvenance: "catalog", supplementalMetadata: [:]),
-            CatalogModel(id: "claude/claude-opus-4", object: "model", created: 1700000001, ownedBy: "anthropic", displayName: nil, tier: nil, sourceProvenance: "catalog", supplementalMetadata: [:]),
+            CatalogModel(id: "claude-sonnet-4", object: "model", created: 1700000000, ownedBy: "anthropic", displayName: nil, tier: nil, sourceProvenance: "catalog", supplementalMetadata: [:]),
+            CatalogModel(id: "claude-opus-4", object: "model", created: 1700000001, ownedBy: "anthropic", displayName: nil, tier: nil, sourceProvenance: "catalog", supplementalMetadata: [:]),
             CatalogModel(id: "zai/glm-5.1", object: "model", created: 1700000002, ownedBy: "zai", displayName: nil, tier: nil, sourceProvenance: "catalog", supplementalMetadata: [:])
         ]
     }
@@ -528,7 +528,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         }
 
         let ids = entries.compactMap { $0["id"] as? String }
-        XCTAssertTrue(ids.contains("claude/claude-sonnet-4"), "Should contain catalog model")
+        XCTAssertTrue(ids.contains("claude-sonnet-4"), "Should contain catalog model")
         XCTAssertTrue(ids.contains("zai/glm-5.1"), "Should contain catalog model")
         XCTAssertFalse(ids.contains("old-model"), "Should NOT contain backend model")
         XCTAssertEqual(json["object"] as? String, "list")
@@ -1301,7 +1301,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         let result = provider.fetchCatalogModels()
         if case .available(let models) = result {
             XCTAssertFalse(models.isEmpty, "Should have models for connected providers")
-            let claudeModels = models.filter { $0.id.hasPrefix("claude/") }
+            let claudeModels = models.filter { $0.id.hasPrefix("claude-") }
             let kimiModels = models.filter { $0.id.hasPrefix("kimi/") }
             XCTAssertFalse(claudeModels.isEmpty, "Should have Claude models")
             XCTAssertFalse(kimiModels.isEmpty, "Should have Kimi models")
@@ -1369,7 +1369,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
 
         let result = proxy.catalogProvider.fetchCatalogModels()
         if case .available(let models) = result {
-            let claudeModels = models.filter { $0.id.hasPrefix("claude/") }
+            let claudeModels = models.filter { $0.id.hasPrefix("claude-") }
             XCTAssertFalse(claudeModels.isEmpty, "Should return Claude models from fake fetcher via production wiring path")
         } else {
             XCTFail("configureCatalogProvider with fake fetcher should return .available, got \(result)")
@@ -1542,7 +1542,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             let ocGoModels = models.filter { $0.id.hasPrefix("opencode-go/") }
             XCTAssertFalse(ocGoModels.isEmpty, "Should have OpenCode Go models from injected closure")
             // Should NOT have models for providers NOT in the injected set
-            let claudeModels = models.filter { $0.id.hasPrefix("claude/") }
+            let claudeModels = models.filter { $0.id.hasPrefix("claude-") }
             XCTAssertTrue(claudeModels.isEmpty,
                            "Should NOT have Claude models when closure returns only opencode-go")
         } else {
@@ -1617,7 +1617,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         if case .available(let models) = result {
             // Only ZAI models should appear, not Claude/Codex/Kimi
             let zaiModels = models.filter { $0.id.hasPrefix("zai/") }
-            let claudeModels = models.filter { $0.id.hasPrefix("claude/") }
+            let claudeModels = models.filter { $0.id.hasPrefix("claude-") }
             XCTAssertFalse(zaiModels.isEmpty, "Should have ZAI models from injected closure")
             XCTAssertTrue(claudeModels.isEmpty,
                            "Should NOT have Claude models — injected closure controls filtering, not any singleton")
@@ -1901,7 +1901,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             XCTAssertFalse(ocGoModels.isEmpty,
                             "Injected closure returning opencode-go should produce opencode-go models")
             // Claude models should NOT appear because the closure returns only opencode-go
-            let claudeModels = models.filter { $0.id.hasPrefix("claude/") }
+            let claudeModels = models.filter { $0.id.hasPrefix("claude-") }
             XCTAssertTrue(claudeModels.isEmpty,
                            "Claude should not appear when closure returns only opencode-go")
         } else {
