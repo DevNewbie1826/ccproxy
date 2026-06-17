@@ -3,3 +3,5 @@
 superpowers
 CCProxy.app
 .worktrees/
+.codegraph/
+.opencode/
