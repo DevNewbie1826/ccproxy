@@ -1,7 +1,6 @@
 import SwiftUI
 import ServiceManagement
 
-/// Maps service types to their bundled provider icon filenames.
 enum ProviderIconNames {
     static func iconName(for serviceType: ServiceType) -> String {
         switch serviceType {
@@ -16,7 +15,6 @@ enum ProviderIconNames {
     }
 }
 
-/// A single account row with disable toggle and remove button
 struct AccountRowView: View {
     let account: AuthAccount
     let removeColor: Color
@@ -78,7 +76,6 @@ struct AccountRowView: View {
     }
 }
 
-/// Vercel AI Gateway controls shown in Claude expanded section
 struct VercelGatewayControls: View {
     @ObservedObject var serverManager: ServerManager
     @State private var showingSaved = false
@@ -124,7 +121,6 @@ struct VercelGatewayControls: View {
     }
 }
 
-/// A row displaying a service with its connected accounts and add button
 struct ServiceRow<ExtraContent: View>: View {
     let serviceType: ServiceType
     let iconName: String
@@ -156,9 +152,7 @@ struct ServiceRow<ExtraContent: View>: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Header row
             HStack {
-                // Enable/disable toggle
                 Toggle("", isOn: Binding(
                     get: { isEnabled },
                     set: { onToggleEnabled($0) }
@@ -190,11 +184,9 @@ struct ServiceRow<ExtraContent: View>: View {
                 }
             }
             
-            // Account display (only shown when enabled)
             if isEnabled {
                 let enabledCount = accounts.filter { !$0.isDisabled }.count
                 if !accounts.isEmpty {
-                    // Collapsible summary
                     HStack(spacing: 4) {
                         Text("\(accounts.count) connected account\(accounts.count == 1 ? "" : "s")")
                             .font(.caption)
@@ -218,7 +210,6 @@ struct ServiceRow<ExtraContent: View>: View {
                         }
                     }
 
-                    // Expanded accounts list
                     if isExpanded {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(accounts) { account in
@@ -281,7 +272,6 @@ struct SettingsView: View {
     @State private var authenticatingService: ServiceType? = nil
     @State private var showingAuthResult = false
     @State private var authResultMessage = ""
-    @State private var authResultSuccess = false
     @State private var fileMonitor: DispatchSourceFileSystemObject?
     @State private var showingZaiApiKeyPrompt = false
     @State private var zaiApiKey = ""
@@ -493,7 +483,6 @@ struct SettingsView: View {
             Spacer()
                 .frame(height: 6)
 
-            // Footer
             VStack(spacing: 4) {
                 Text("CCProxy \(appVersion)")
                     .font(.caption)
@@ -600,13 +589,11 @@ struct SettingsView: View {
     
     private func toggleAccountDisabled(_ account: AuthAccount) {
         if authManager.toggleAccountDisabled(account) {
-            authResultSuccess = true
             authResultMessage = account.isDisabled
                 ? "✓ Enabled \(account.displayName)"
                 : "✓ Disabled \(account.displayName)"
             showingAuthResult = true
         } else {
-            authResultSuccess = false
             authResultMessage = "Failed to update \(account.displayName). Please try again."
             showingAuthResult = true
         }
@@ -664,11 +651,9 @@ struct SettingsView: View {
                 self.authenticatingService = nil
                 
                 if success {
-                    self.authResultSuccess = true
                     self.authResultMessage = self.successMessage(for: serviceType)
                     self.showingAuthResult = true
                 } else {
-                    self.authResultSuccess = false
                     self.authResultMessage = "Authentication failed. Please check if the browser opened and try again.\n\nDetails: \(output.isEmpty ? "No output from authentication process" : output)"
                     self.showingAuthResult = true
                 }
@@ -706,12 +691,10 @@ struct SettingsView: View {
                 self.zaiApiKey = ""
                 
                 if success {
-                    self.authResultSuccess = true
                     self.authResultMessage = self.successMessage(for: .zai)
                     self.showingAuthResult = true
                     self.authManager.checkAuthStatus()
                 } else {
-                    self.authResultSuccess = false
                     self.authResultMessage = "Failed to save API key.\n\nDetails: \(output.isEmpty ? "Unknown error" : output)"
                     self.showingAuthResult = true
                 }
@@ -730,12 +713,10 @@ struct SettingsView: View {
                 self.miniMaxApiKey = ""
 
                 if success {
-                    self.authResultSuccess = true
                     self.authResultMessage = self.successMessage(for: .minimax)
                     self.showingAuthResult = true
                     self.authManager.checkAuthStatus()
                 } else {
-                    self.authResultSuccess = false
                     self.authResultMessage = "Failed to save API key.\n\nDetails: \(output.isEmpty ? "Unknown error" : output)"
                     self.showingAuthResult = true
                 }
@@ -754,12 +735,10 @@ struct SettingsView: View {
                 self.openCodeGoApiKey = ""
 
                 if success {
-                    self.authResultSuccess = true
                     self.authResultMessage = self.successMessage(for: .opencodeGo)
                     self.showingAuthResult = true
                     self.authManager.checkAuthStatus()
                 } else {
-                    self.authResultSuccess = false
                     self.authResultMessage = "Failed to save API key.\n\nDetails: \(output.isEmpty ? "Unknown error" : output)"
                     self.showingAuthResult = true
                 }
@@ -770,13 +749,10 @@ struct SettingsView: View {
     private func disconnectAccount(_ account: AuthAccount) {
         let wasRunning = serverManager.isRunning
         
-        // Stop server, delete file, restart
         let cleanup = {
             if self.authManager.deleteAccount(account) {
-                self.authResultSuccess = true
                 self.authResultMessage = "✓ Removed \(account.displayName) from \(account.type.displayName)"
             } else {
-                self.authResultSuccess = false
                 self.authResultMessage = "Failed to remove account"
             }
             self.showingAuthResult = true
