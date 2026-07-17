@@ -17,21 +17,21 @@ enum ExternalModelCatalog {
         "codex-free": "codex",
         "codex-team": "codex",
         "codex-plus": "codex",
-        "codex-pro": "codex"
+        "codex-pro": "codex",
+        "kimi": "kimi",
+        "xai": "xai"
     ]
 
     /// CCProxy provider ID → models.dev provider key (reverse lookup for secondary source).
     static let secondaryProviderMapping: [String: String] = [
         "zai": "zai-coding-plan",
         "minimax": "minimax-coding-plan",
-        "kimi": "moonshotai",
         "opencode-go": "opencode-go"
     ]
 
     private static let providerQualifiedModelIDProviders: Set<String> = [
         "zai",
         "minimax",
-        "kimi",
         "opencode-go"
     ]
 
@@ -904,8 +904,8 @@ class URLSessionCatalogFetcher: CatalogFetcher {
     let session: URLSession
     let timeoutInterval: TimeInterval
 
-    private let modelsJSONURL = URL(string: "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/5753d1a0896fd5bb9ace47adb17b0174ceb79e4d/internal/registry/models/models.json")!
-    private let codexClientURL = URL(string: "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/5753d1a0896fd5bb9ace47adb17b0174ceb79e4d/internal/registry/models/codex_client_models.json")!
+    private let modelsJSONURL = URL(string: "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/models.json")!
+    private let codexClientURL = URL(string: "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/codex_client_models.json")!
     private let modelsDevURL = URL(string: "https://models.dev/api.json")!
 
     init(session: URLSession? = nil, timeoutInterval: TimeInterval = 15.0) {

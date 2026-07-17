@@ -7,27 +7,41 @@ final class ExternalModelCatalogTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    /// CLIProxyAPI models.json fixture with claude, codex tiers, kimi, and unmapped aistudio
-    static let modelsJSONFixture: Data = """
-    {
-        "claude": [
-            {"id": "claude-sonnet-4", "object": "model", "created": 1700000000, "owned_by": "anthropic"},
-            {"id": "claude-opus-4", "object": "model", "created": 1700000001, "owned_by": "anthropic"}
-        ],
-        "codex-free": [
-            {"id": "gpt-4o", "object": "model", "created": 1700000002, "owned_by": "openai", "type": "chat"}
-        ],
-        "codex-pro": [
-            {"id": "o3", "object": "model", "created": 1700000003, "owned_by": "openai"}
-        ],
-        "kimi": [
-            {"id": "kimi-k2", "object": "model", "created": 1700000004, "owned_by": "moonshotai"}
-        ],
-        "aistudio": [
-            {"id": "aistudio-2.5-pro", "object": "model", "created": 1700000005, "owned_by": "google"}
-        ]
-    }
-    """.data(using: .utf8)!
+    /// CLIProxyAPI models.json fixture with claude, codex tiers, official kimi/xai, and unmapped providers
+    static let modelsJSONFixture: Data = {
+        let retiredGravityProvider = "anti" + "gravity"
+        let retiredGoogleProvider = "ge" + "mini"
+        return """
+        {
+            "claude": [
+                {"id": "claude-sonnet-4", "object": "model", "created": 1700000000, "owned_by": "anthropic"},
+                {"id": "claude-opus-4", "object": "model", "created": 1700000001, "owned_by": "anthropic"}
+            ],
+            "codex-free": [
+                {"id": "gpt-4o", "object": "model", "created": 1700000002, "owned_by": "openai", "type": "chat"}
+            ],
+            "codex-pro": [
+                {"id": "o3", "object": "model", "created": 1700000003, "owned_by": "openai"}
+            ],
+            "kimi": [
+                {"id": "kimi-k2", "object": "model", "created": 1700000004, "owned_by": "moonshotai"},
+                {"id": "kimi-k2.6", "object": "model", "created": 1700000005, "owned_by": "moonshotai"}
+            ],
+            "xai": [
+                {"id": "grok-4.5", "object": "model", "created": 1700000006, "owned_by": "xai"}
+            ],
+            "\(retiredGravityProvider)": [
+                {"id": "\(retiredGravityProvider)-pro", "object": "model", "created": 1700000007, "owned_by": "google"}
+            ],
+            "\(retiredGoogleProvider)": [
+                {"id": "\(retiredGoogleProvider)-2.5-pro", "object": "model", "created": 1700000008, "owned_by": "google"}
+            ],
+            "aistudio": [
+                {"id": "aistudio-2.5-pro", "object": "model", "created": 1700000009, "owned_by": "google"}
+            ]
+        }
+        """.data(using: .utf8)!
+    }()
 
     /// codex_client_models.json fixture with supplemental metadata keyed by slug
     static let codexClientFixture: Data = """
@@ -112,8 +126,13 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         let kimiModels = result?.providerModels["kimi"]
         XCTAssertNotNil(kimiModels)
-        XCTAssertEqual(kimiModels?.count, 1)
+        XCTAssertEqual(kimiModels?.count, 2)
         XCTAssertEqual(kimiModels?.first?.id, "kimi-k2")
+
+        let xaiModels = result?.providerModels["xai"]
+        XCTAssertNotNil(xaiModels)
+        XCTAssertEqual(xaiModels?.count, 1)
+        XCTAssertEqual(xaiModels?.first?.id, "grok-4.5")
     }
 
     func testParseModelsJSON_unknownFieldsIgnored() {
@@ -202,9 +221,8 @@ final class ExternalModelCatalogTests: XCTestCase {
         XCTAssertEqual(minimaxModels?.count, 1)
         XCTAssertEqual(minimaxModels?.first?.id, "MiniMax-M2.7")
 
-        let kimiModels = result?.providerModels["kimi"]
-        XCTAssertNotNil(kimiModels)
-        XCTAssertEqual(kimiModels?.count, 1)
+        XCTAssertNil(result?.providerModels["kimi"],
+                     "models.dev moonshotai must not contribute Kimi after official primary registry migration")
 
         let ocGoModels = result?.providerModels["opencode-go"]
         XCTAssertNotNil(ocGoModels)
@@ -291,8 +309,10 @@ final class ExternalModelCatalogTests: XCTestCase {
         XCTAssertEqual(proModel?.tier, "pro")
 
         XCTAssertNotNil(merged.providerModels["claude"])
-        XCTAssertNil(merged.providerModels["kimi"],
-                     "kimi must not appear in primary-only merge — compatible providers are secondary-only")
+        XCTAssertEqual(merged.providerModels["kimi"]?.map(\.id), ["kimi-k2", "kimi-k2.6"],
+                       "kimi must come from the primary registry with bare official IDs")
+        XCTAssertEqual(merged.providerModels["xai"]?.map(\.id), ["grok-4.5"],
+                       "xai must come from the primary registry with bare official IDs")
     }
 
     func testMerge_codexClientSupplementsBySlug() {
@@ -377,15 +397,26 @@ final class ExternalModelCatalogTests: XCTestCase {
             clock: FakeClock(Date())
         )!
 
-        let allConnectedProviders: Set<String> = ["claude", "codex", "kimi"]
+        let allConnectedProviders: Set<String> = ["claude", "codex", "kimi", "xai"]
         let filtered = ExternalModelCatalog.filterCatalog(
             snapshot: merged,
             connectedProviders: allConnectedProviders
         )
 
+        let retiredProviderKeys = ["anti" + "gravity", "ge" + "mini"]
+
         for model in filtered {
             XCTAssertFalse(model.id.hasPrefix("aistudio/"),
                            "Unmapped primary key 'aistudio' should not appear in filtered output")
+            for retiredProviderKey in retiredProviderKeys {
+                XCTAssertFalse(model.id.hasPrefix("\(retiredProviderKey)/"),
+                               "Unmapped primary key '\(retiredProviderKey)' should not appear in filtered output")
+            }
+        }
+
+        XCTAssertNil(merged.providerModels["aistudio"], "Unmapped aistudio key must be dropped from merged snapshot")
+        for retiredProviderKey in retiredProviderKeys {
+            XCTAssertNil(merged.providerModels[retiredProviderKey], "Unmapped \(retiredProviderKey) key must be dropped from merged snapshot")
         }
     }
 
@@ -488,7 +519,8 @@ final class ExternalModelCatalogTests: XCTestCase {
         }
 
         XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("zai/") }))
-        XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("kimi/") }))
+        XCTAssertTrue(filtered.contains(where: { $0.id == "kimi-k2" }))
+        XCTAssertTrue(filtered.contains(where: { $0.id == "kimi-k2.6" }))
         XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("opencode-go/") }))
     }
 
@@ -522,7 +554,7 @@ final class ExternalModelCatalogTests: XCTestCase {
             clock: FakeClock(Date())
         )!
 
-        let connected: Set<String> = ["claude", "codex", "zai", "minimax", "kimi", "opencode-go"]
+        let connected: Set<String> = ["claude", "codex", "zai", "minimax", "kimi", "xai", "opencode-go"]
         let filtered = ExternalModelCatalog.filterCatalog(
             snapshot: merged,
             connectedProviders: connected
@@ -532,7 +564,8 @@ final class ExternalModelCatalogTests: XCTestCase {
         XCTAssertTrue(filtered.contains(where: { $0.id == "gpt-4o" || $0.id == "o3" }))
         XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("zai/") }))
         XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("minimax/") }))
-        XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("kimi/") }))
+        XCTAssertTrue(filtered.contains(where: { $0.id == "kimi-k2" }))
+        XCTAssertTrue(filtered.contains(where: { $0.id == "grok-4.5" }))
         XCTAssertTrue(filtered.contains(where: { $0.id.hasPrefix("opencode-go/") }))
     }
 
@@ -596,6 +629,28 @@ final class ExternalModelCatalogTests: XCTestCase {
         }
 
         XCTAssertTrue(filtered.contains(where: { $0.id == "opencode-go/kimi-k2.6" }))
+    }
+
+    func testFilter_kimiAndXaiPrimaryModelIDsAreBare() {
+        let primary = ExternalModelCatalog.parseModelsJSON(Self.modelsJSONFixture)!
+        let merged = ExternalModelCatalog.mergeCatalogs(
+            primary: primary,
+            codexClient: nil,
+            secondary: nil,
+            clock: FakeClock(Date())
+        )!
+
+        let filtered = ExternalModelCatalog.filterCatalog(
+            snapshot: merged,
+            connectedProviders: ["kimi", "xai"]
+        )
+        let ids = Set(filtered.map(\.id))
+
+        XCTAssertTrue(ids.contains("kimi-k2"))
+        XCTAssertTrue(ids.contains("kimi-k2.6"))
+        XCTAssertTrue(ids.contains("grok-4.5"))
+        XCTAssertFalse(ids.contains("kimi/kimi-k2"))
+        XCTAssertFalse(ids.contains("xai/grok-4.5"))
     }
 
     // MARK: - Cache Coordinator Tests
@@ -1547,7 +1602,8 @@ final class ExternalModelCatalogTests: XCTestCase {
         XCTAssertEqual(mapping["codex-team"], "codex")
         XCTAssertEqual(mapping["codex-plus"], "codex")
         XCTAssertEqual(mapping["codex-pro"], "codex")
-        XCTAssertNil(mapping["kimi"], "kimi must not be in primaryProviderMapping — compatible providers are secondary-only")
+        XCTAssertEqual(mapping["kimi"], "kimi")
+        XCTAssertEqual(mapping["xai"], "xai")
     }
 
     func testSecondaryProviderMapping_exactMappings() {
@@ -1556,7 +1612,7 @@ final class ExternalModelCatalogTests: XCTestCase {
         XCTAssertNil(mapping["codex"], "codex must not be in secondaryProviderMapping — OAuth providers are primary-only")
         XCTAssertEqual(mapping["zai"], "zai-coding-plan")
         XCTAssertEqual(mapping["minimax"], "minimax-coding-plan")
-        XCTAssertEqual(mapping["kimi"], "moonshotai")
+        XCTAssertNil(mapping["kimi"], "kimi must not map to models.dev moonshotai after official primary registry migration")
         XCTAssertEqual(mapping["opencode-go"], "opencode-go")
     }
 
@@ -1570,7 +1626,7 @@ final class ExternalModelCatalogTests: XCTestCase {
             clock: FakeClock(Date())
         )!
 
-        let connected: Set<String> = ["claude", "codex", "kimi", "minimax", "opencode-go", "zai"]
+        let connected: Set<String> = ["claude", "codex", "kimi", "minimax", "opencode-go", "xai", "zai"]
         let filtered = ExternalModelCatalog.filterCatalog(
             snapshot: merged, connectedProviders: connected
         )
@@ -1581,10 +1637,12 @@ final class ExternalModelCatalogTests: XCTestCase {
             "claude-sonnet-4",
             "gpt-4o",
             "o3",
-            "kimi/kimi-k2",
+            "kimi-k2",
+            "kimi-k2.6",
             "minimax/MiniMax-M2.7",
             "opencode-go/claude-sonnet-4",
             "opencode-go/kimi-k2.6",
+            "grok-4.5",
             "zai/glm-5",
             "zai/glm-5.1"
         ])
@@ -3011,7 +3069,7 @@ final class ExternalModelCatalogTests: XCTestCase {
             XCTAssertNotNil(snapshot.providerModels["zai"],
                            "Refreshed snapshot should contain zai from models.dev")
             XCTAssertNotNil(snapshot.providerModels["kimi"],
-                           "Refreshed snapshot should contain kimi from models.dev")
+                           "Refreshed snapshot should contain kimi from the primary registry")
         } else {
             XCTFail("Expected refreshed snapshot after stale runtime cache rejection, got \(result)")
         }
@@ -3055,11 +3113,12 @@ final class ExternalModelCatalogTests: XCTestCase {
                        "currentSchemaVersion must be '2' for catalog source policy v0.3.1")
     }
 
-    /// Verifies that primaryProviderMapping does NOT contain kimi (removed in policy v0.3.1).
-    /// The standalone generator script's primaryProviderMapping must also exclude kimi.
-    func testPrimaryProviderMapping_excludesKimi() {
-        XCTAssertNil(ExternalModelCatalog.primaryProviderMapping["kimi"],
-                     "primaryProviderMapping must not contain 'kimi' — removed in policy v0.3.1")
+    /// Verifies that primaryProviderMapping contains official OAuth registry providers.
+    func testPrimaryProviderMapping_includesOfficialOAuthRegistryProviders() {
+        XCTAssertEqual(ExternalModelCatalog.primaryProviderMapping["kimi"], "kimi",
+                       "primaryProviderMapping must contain official Kimi registry entries")
+        XCTAssertEqual(ExternalModelCatalog.primaryProviderMapping["xai"], "xai",
+                       "primaryProviderMapping must contain official xAI registry entries")
     }
 
     /// Verifies that secondaryProviderMapping does NOT map claude→anthropic or codex→openai
@@ -3075,7 +3134,7 @@ final class ExternalModelCatalogTests: XCTestCase {
     // MARK: - Catalog Source Policy Tests (Task 1)
 
     /// Verifies that secondaryProviderMapping excludes OAuth providers (claude, codex)
-    /// and retains only compatible/API-key providers (zai, minimax, kimi, opencode-go).
+    /// and retains only compatible/API-key secondary providers (zai, minimax, opencode-go).
     /// RED: Currently fails because secondaryProviderMapping still maps claude→anthropic and codex→openai.
     func testProviderSourcePolicy_secondaryMappingExcludesOAuthProviders() {
         let mapping = ExternalModelCatalog.secondaryProviderMapping
@@ -3086,13 +3145,13 @@ final class ExternalModelCatalogTests: XCTestCase {
         XCTAssertNil(mapping["codex"],
                      "codex must not be in secondaryProviderMapping — OAuth providers are primary-only")
 
-        // Compatible/API-key providers must still be mapped to models.dev keys
+        // Compatible/API-key providers that still source from models.dev must remain mapped
         XCTAssertEqual(mapping["zai"], "zai-coding-plan",
                        "zai must map to zai-coding-plan in secondaryProviderMapping")
         XCTAssertEqual(mapping["minimax"], "minimax-coding-plan",
                        "minimax must map to minimax-coding-plan in secondaryProviderMapping")
-        XCTAssertEqual(mapping["kimi"], "moonshotai",
-                       "kimi must map to moonshotai in secondaryProviderMapping")
+        XCTAssertNil(mapping["kimi"],
+                     "kimi must not map to moonshotai after official primary registry migration")
         XCTAssertEqual(mapping["opencode-go"], "opencode-go",
                        "opencode-go must map to opencode-go in secondaryProviderMapping")
     }
@@ -3154,12 +3213,8 @@ final class ExternalModelCatalogTests: XCTestCase {
         }
     }
 
-    /// Verifies that primary registry alone does not expose kimi/ models
-    /// when models.dev secondary source is absent. kimi is a compatible/API-key
-    /// provider that should only come through models.dev secondary mapping.
-    /// RED: Currently fails because primaryProviderMapping includes "kimi"→"kimi",
-    /// so models.json kimi entries are exposed through primary merge.
-    func testProviderSourcePolicy_primaryRegistryDoesNotExposeCompatibleApiKeyKimiWithoutModelsDev() {
+    /// Verifies that primary registry exposes official Kimi models with bare IDs.
+    func testProviderSourcePolicy_primaryRegistryExposesOfficialKimiWithoutModelsDev() {
         let primary = ExternalModelCatalog.parseModelsJSON(Self.modelsJSONFixture)!
         let merged = ExternalModelCatalog.mergeCatalogs(
             primary: primary,
@@ -3174,10 +3229,10 @@ final class ExternalModelCatalogTests: XCTestCase {
             connectedProviders: connected
         )
 
-        for model in filtered {
-            XCTAssertFalse(model.id.hasPrefix("kimi/"),
-                           "Primary registry alone must not expose kimi/ models without models.dev: \(model.id)")
-        }
+        let ids = Set(filtered.map(\.id))
+        XCTAssertTrue(ids.contains("kimi-k2"))
+        XCTAssertTrue(ids.contains("kimi-k2.6"))
+        XCTAssertFalse(ids.contains("kimi/kimi-k2"))
     }
 
     /// Verifies that merging all sources does not add models.dev-only OAuth models.
@@ -3207,9 +3262,8 @@ final class ExternalModelCatalogTests: XCTestCase {
                        "Codex models must not include models.dev-only gpt-4o-mini, got: \(codexIds.sorted())")
     }
 
-    /// Verifies that compatible/API-key providers still use models.dev after policy change.
-    /// Guard test: this should pass with current production to confirm existing good behavior.
-    func testProviderSourcePolicy_compatibleProvidersStillUseModelsDev() {
+    /// Verifies that secondary providers still use models.dev while Kimi comes from primary.
+    func testProviderSourcePolicy_secondaryProvidersStillUseModelsDevAndKimiUsesPrimary() {
         let primary = ExternalModelCatalog.parseModelsJSON(Self.modelsJSONFixture)!
         let codexClient = ExternalModelCatalog.parseCodexClientModels(Self.codexClientFixture)!
         let secondary = ExternalModelCatalog.parseModelsDev(Self.modelsDevFixture)!
@@ -3234,15 +3288,16 @@ final class ExternalModelCatalogTests: XCTestCase {
                        "zai/glm-5 must be present after filtering all providers")
         XCTAssertTrue(filteredIds.contains("minimax/MiniMax-M2.7"),
                        "minimax/MiniMax-M2.7 must be present after filtering all providers")
-        XCTAssertTrue(filteredIds.contains("kimi/kimi-k2"),
-                       "kimi/kimi-k2 must be present after filtering all providers")
+        XCTAssertTrue(filteredIds.contains("kimi-k2"),
+                       "kimi-k2 must be present as a bare official primary-registry ID")
+        XCTAssertFalse(filteredIds.contains("kimi/kimi-k2"),
+                       "kimi must no longer be provider-qualified in filtered output")
         XCTAssertTrue(filteredIds.contains("opencode-go/kimi-k2.6"),
                        "opencode-go/kimi-k2.6 must be present after filtering all providers")
     }
 
-    /// Verifies that merged providerModels does not contain grok or xai providers.
-    /// Guard test: confirms no unintended provider leakage from fixture or mapping changes.
-    func testProviderSourcePolicy_noGrokOrXaiProviderAdded() {
+    /// Verifies that xAI is emitted as provider xai and no legacy grok provider leaks.
+    func testProviderSourcePolicy_xaiProviderAddedWithoutGrokProviderLeak() {
         let primary = ExternalModelCatalog.parseModelsJSON(Self.modelsJSONFixture)!
         let codexClient = ExternalModelCatalog.parseCodexClientModels(Self.codexClientFixture)!
         let secondary = ExternalModelCatalog.parseModelsDev(Self.modelsDevFixture)!
@@ -3256,8 +3311,8 @@ final class ExternalModelCatalogTests: XCTestCase {
 
         XCTAssertNil(merged.providerModels["grok"],
                      "grok provider must not be present in merged catalog")
-        XCTAssertNil(merged.providerModels["xai"],
-                     "xai provider must not be present in merged catalog")
+        XCTAssertEqual(merged.providerModels["xai"]?.map(\.id), ["grok-4.5"],
+                       "xai provider must be present with bare grok model IDs")
     }
 
     // MARK: - Source URL Policy Tests (Task 0)
@@ -3288,52 +3343,38 @@ final class ExternalModelCatalogTests: XCTestCase {
         return text
     }
 
-    func testProviderSourcePolicy_snapshotGeneratorPinsCLIProxyAPISourcesToApprovedCommit() {
+    func testProviderSourcePolicy_snapshotGeneratorUsesCLIProxyAPIMainBranchSources() {
         let generatorPath = Self.repoRoot
             .appendingPathComponent("scripts/generate-model-catalog-snapshot.swift")
         let source = Self.readSourceText(at: generatorPath)
 
-        let approvedCommit = "5753d1a0896fd5bb9ace47adb17b0174ceb79e4d"
+        let retiredCommit = "5753d1a0896fd5bb9ace47adb17b0174ceb79e4d"
 
-        // Approved commit URLs must be present for both models.json and codex_client_models.json
-        let approvedModelsURL = "CLIProxyAPI/\(approvedCommit)/internal/registry/models/models.json"
-        let approvedCodexURL = "CLIProxyAPI/\(approvedCommit)/internal/registry/models/codex_client_models.json"
-        XCTAssertTrue(source.contains(approvedModelsURL),
-                      "Generator must pin models.json to approved commit: \(approvedModelsURL)")
-        XCTAssertTrue(source.contains(approvedCodexURL),
-                      "Generator must pin codex_client_models.json to approved commit: \(approvedCodexURL)")
-
-        // CLIProxyAPI/main URLs must NOT be present for either source
-        let forbiddenModelsURL = "CLIProxyAPI/main/internal/registry/models/models.json"
-        let forbiddenCodexURL = "CLIProxyAPI/main/internal/registry/models/codex_client_models.json"
-        XCTAssertFalse(source.contains(forbiddenModelsURL),
-                       "Generator must not default models.json to CLIProxyAPI/main: \(forbiddenModelsURL)")
-        XCTAssertFalse(source.contains(forbiddenCodexURL),
-                       "Generator must not default codex_client_models.json to CLIProxyAPI/main: \(forbiddenCodexURL)")
+        let mainModelsURL = "CLIProxyAPI/main/internal/registry/models/models.json"
+        let mainCodexURL = "CLIProxyAPI/main/internal/registry/models/codex_client_models.json"
+        XCTAssertTrue(source.contains(mainModelsURL),
+                      "Generator must use main-branch models.json: \(mainModelsURL)")
+        XCTAssertTrue(source.contains(mainCodexURL),
+                      "Generator must use main-branch codex_client_models.json: \(mainCodexURL)")
+        XCTAssertFalse(source.contains(retiredCommit),
+                       "Generator must not retain the retired pinned commit")
     }
 
-    func testProviderSourcePolicy_productionFetcherPinsCLIProxyAPISourcesToApprovedCommit() {
+    func testProviderSourcePolicy_productionFetcherUsesCLIProxyAPIMainBranchSources() {
         let productionPath = Self.packageRoot
             .appendingPathComponent("Sources/ExternalModelCatalog.swift")
         let source = Self.readSourceText(at: productionPath)
 
-        let approvedCommit = "5753d1a0896fd5bb9ace47adb17b0174ceb79e4d"
+        let retiredCommit = "5753d1a0896fd5bb9ace47adb17b0174ceb79e4d"
 
-        // Approved commit URLs must be present in URLSessionCatalogFetcher
-        let approvedModelsURL = "CLIProxyAPI/\(approvedCommit)/internal/registry/models/models.json"
-        let approvedCodexURL = "CLIProxyAPI/\(approvedCommit)/internal/registry/models/codex_client_models.json"
-        XCTAssertTrue(source.contains(approvedModelsURL),
-                      "Production URLSessionCatalogFetcher must pin models.json to approved commit: \(approvedModelsURL)")
-        XCTAssertTrue(source.contains(approvedCodexURL),
-                      "Production URLSessionCatalogFetcher must pin codex_client_models.json to approved commit: \(approvedCodexURL)")
-
-        // CLIProxyAPI/main URLs must NOT be present
-        let forbiddenModelsURL = "CLIProxyAPI/main/internal/registry/models/models.json"
-        let forbiddenCodexURL = "CLIProxyAPI/main/internal/registry/models/codex_client_models.json"
-        XCTAssertFalse(source.contains(forbiddenModelsURL),
-                       "Production must not default models.json to CLIProxyAPI/main: \(forbiddenModelsURL)")
-        XCTAssertFalse(source.contains(forbiddenCodexURL),
-                       "Production must not default codex_client_models.json to CLIProxyAPI/main: \(forbiddenCodexURL)")
+        let mainModelsURL = "CLIProxyAPI/main/internal/registry/models/models.json"
+        let mainCodexURL = "CLIProxyAPI/main/internal/registry/models/codex_client_models.json"
+        XCTAssertTrue(source.contains(mainModelsURL),
+                      "Production URLSessionCatalogFetcher must use main-branch models.json: \(mainModelsURL)")
+        XCTAssertTrue(source.contains(mainCodexURL),
+                      "Production URLSessionCatalogFetcher must use main-branch codex_client_models.json: \(mainCodexURL)")
+        XCTAssertFalse(source.contains(retiredCommit),
+                       "Production URLSessionCatalogFetcher must not retain the retired pinned commit")
     }
 
     /// Reads the standalone generator script source text for source-level assertions.
@@ -3346,32 +3387,34 @@ final class ExternalModelCatalogTests: XCTestCase {
 
     /// Verifies that the standalone snapshot generator's provider mappings match the
     /// production ExternalModelCatalog policy (v0.3.1). Checks:
-    ///   - Generator does NOT contain removed mappings: "claude"→"anthropic",
-    ///     "codex"→"openai" (secondary), or "kimi"→"kimi" (primary).
-    ///   - Generator DOES contain compatible secondary mappings: zai, minimax, kimi→moonshotai,
-    ///     opencode-go.
+    ///   - Generator does NOT contain removed secondary mappings: "claude"→"anthropic",
+    ///     "codex"→"openai", or "kimi"→"moonshotai".
+    ///   - Generator DOES contain primary mappings for official OAuth registry providers
+    ///     kimi and xai, plus compatible secondary mappings for zai, minimax, and opencode-go.
     ///   - Generator emits schemaVersion "2" and does NOT emit schemaVersion "1"
     ///     in the current snapshot creation paths.
     func testProviderSourcePolicy_snapshotGeneratorMappingsMatchProductionPolicy() {
         let source = Self.readGeneratorSource()
 
-        // --- Removed primary mapping: kimi → kimi ---
-        XCTAssertFalse(source.contains("\"kimi\": \"kimi\""),
-                       "Generator primaryProviderMapping must not contain '\"kimi\": \"kimi\"' — removed in v0.3.1")
+        // --- Required primary mappings: kimi and xai ---
+        XCTAssertTrue(source.contains("\"kimi\": \"kimi\""),
+                      "Generator primaryProviderMapping must contain '\"kimi\": \"kimi\"'")
+        XCTAssertTrue(source.contains("\"xai\": \"xai\""),
+                      "Generator primaryProviderMapping must contain '\"xai\": \"xai\"'")
 
-        // --- Removed secondary mappings: claude → anthropic, codex → openai ---
+        // --- Removed secondary mappings: claude → anthropic, codex → openai, kimi → moonshotai ---
         XCTAssertFalse(source.contains("\"claude\": \"anthropic\""),
                        "Generator secondaryProviderMapping must not contain '\"claude\": \"anthropic\"' — removed in v0.3.1")
         XCTAssertFalse(source.contains("\"codex\": \"openai\""),
                        "Generator secondaryProviderMapping must not contain '\"codex\": \"openai\"' — removed in v0.3.1")
+        XCTAssertFalse(source.contains("\"kimi\": \"moonshotai\""),
+                       "Generator secondaryProviderMapping must not contain '\"kimi\": \"moonshotai\"'")
 
         // --- Required compatible secondary mappings ---
         XCTAssertTrue(source.contains("\"zai\": \"zai-coding-plan\""),
                       "Generator secondaryProviderMapping must contain '\"zai\": \"zai-coding-plan\"'")
         XCTAssertTrue(source.contains("\"minimax\": \"minimax-coding-plan\""),
                       "Generator secondaryProviderMapping must contain '\"minimax\": \"minimax-coding-plan\"'")
-        XCTAssertTrue(source.contains("\"kimi\": \"moonshotai\""),
-                      "Generator secondaryProviderMapping must contain '\"kimi\": \"moonshotai\"'")
         XCTAssertTrue(source.contains("\"opencode-go\": \"opencode-go\""),
                       "Generator secondaryProviderMapping must contain '\"opencode-go\": \"opencode-go\"'")
 

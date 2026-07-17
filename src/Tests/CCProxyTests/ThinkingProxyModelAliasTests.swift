@@ -121,6 +121,14 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         XCTAssertNil(result, "Unknown model IDs should not be rewritten")
     }
 
+    func testKimiModelUnchangedByTopLevelAliasCanonicalization() {
+        let input = """
+        {"model":"kimi-k2","messages":[{"role":"user","content":"hi"}]}
+        """
+        let result = canonicalizeTopLevelModelAlias(in: input)
+        XCTAssertNil(result, "Kimi official bare model IDs should not be rewritten by alias canonicalization")
+    }
+
     // MARK: Missing model field
 
     func testMissingModelFieldUnchanged() {
@@ -1302,7 +1310,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         if case .available(let models) = result {
             XCTAssertFalse(models.isEmpty, "Should have models for connected providers")
             let claudeModels = models.filter { $0.id.hasPrefix("claude-") }
-            let kimiModels = models.filter { $0.id.hasPrefix("kimi/") }
+            let kimiModels = models.filter { $0.id == "kimi-k2" || $0.id == "kimi-k2.6" }
             XCTAssertFalse(claudeModels.isEmpty, "Should have Claude models")
             XCTAssertFalse(kimiModels.isEmpty, "Should have Kimi models")
             // Should NOT have models for unconnected providers
