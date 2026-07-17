@@ -24,7 +24,7 @@ The goal here is **not** to claim a ground-up rewrite. The goal is to keep the o
 
 CCProxy is about **opening up the provider layer**.
 
-It is based on `automazeio/vibeproxy`, but extends that base by making it possible to connect **additional provider APIs such as Kimi and MiniMax** and by leaning into a **local proxy workflow** for Claude Code.
+It is based on `automazeio/vibeproxy`, but extends that base by making it possible to connect **official provider accounts such as Kimi and xAI Grok** while still supporting **API-key providers such as MiniMax**, and by leaning into a **local proxy workflow** for Claude Code.
 
 That means you are not limited to a single provider's model lineup. With the local proxy as the routing layer, CCProxy is aimed at a workflow where you can choose and combine models from different providers depending on the task.
 
@@ -238,8 +238,8 @@ CCProxy maintains an external model catalog that drives provider model lists at 
 
 ### Catalog sources
 
-- **Primary**: CLIProxyAPI `models.json` and `codex_client_models.json`
-- **Secondary**: [models.dev](https://models.dev/api.json)
+- **Primary**: CLIProxyAPI main-branch `models.json` and `codex_client_models.json`
+- **Fallback**: bundled snapshot (`model-catalog-snapshot.json`) when the live registry is unavailable
 
 ### Cache behavior
 
@@ -262,10 +262,10 @@ When no valid runtime cache exists but the bundled snapshot is valid, a failed r
 The `/v1/models` endpoint is filtered to **connected providers only**.
 
 A provider is considered connected when:
-- **Claude / Codex**: enabled with valid, non-disabled, non-expired OAuth auth
-- **Z.AI / MiniMax / Kimi / OpenCode Go**: enabled with valid, non-disabled API-key credentials
+- **Claude / Codex / Kimi / xAI Grok**: enabled with valid, non-disabled, non-expired OAuth auth. Legacy Kimi API-key users are auto-quarantined and shown **Re-login required**.
+- **Z.AI / MiniMax / OpenCode Go**: enabled with valid, non-disabled API-key credentials
 
-Providers that are disabled, have no auth, have expired OAuth, or have empty/missing API keys are excluded from `/v1/models` responses and from generated config model lists.
+Providers that are disabled, have no auth, have expired OAuth, or have empty/missing API-key credentials for Z.AI / MiniMax / OpenCode Go are excluded from `/v1/models` responses and from generated config model lists.
 
 ## Notes
 

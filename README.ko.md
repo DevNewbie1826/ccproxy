@@ -25,7 +25,7 @@ CCProxy는 AI 코딩 도구용 로컬 프록시를 실행하고, 인증 및 실�
 
 CCProxy의 핵심은 **provider 선택지를 넓히는 것**입니다.
 
-`automazeio/vibeproxy`를 기반으로 했지만, CCProxy는 원본에서 기본적으로 지원하지 않던 **Kimi, MiniMax 등의 API 연결**을 추가하고, **로컬 프록시를 중심에 둔 Claude Code 워크플로우**를 더 중요하게 다룹니다.
+`automazeio/vibeproxy`를 기반으로 했지만, CCProxy는 **Kimi와 xAI Grok 같은 공식 provider 계정**을 연결할 수 있게 하고, **MiniMax 같은 API 키 provider**도 계속 지원하면서, **로컬 프록시를 중심에 둔 Claude Code 워크플로우**를 더 중요하게 다룹니다.
 
 즉, 하나의 provider에만 묶이는 대신, 로컬 프록시를 경유해 작업에 맞는 여러 provider의 모델을 선택하고 조합해 사용할 수 있습니다.
 
@@ -239,8 +239,8 @@ CCProxy는 런타임에 provider 모델 목록을 제공하기 위해 외부 모
 
 ### 카탈로그 소스
 
-- **1차**: CLIProxyAPI `models.json` 및 `codex_client_models.json`
-- **2차**: [models.dev](https://models.dev/api.json)
+- **1차**: CLIProxyAPI main 브랜치의 `models.json` 및 `codex_client_models.json`
+- **대체 소스**: 라이브 registry를 가져올 수 없을 때 사용하는 번들 스냅샷 (`model-catalog-snapshot.json`)
 
 ### 캐시 동작
 
@@ -263,10 +263,10 @@ CCProxy는 런타임에 provider 모델 목록을 제공하기 위해 외부 모
 `/v1/models` 엔드포인트는 **연결된 provider**만 필터링하여 표시합니다.
 
 provider가 연결된 것으로 간주되는 조건:
-- **Claude / Codex**: 활성화되어 있고, 유효하며 비활성화되지 않고 만료되지 않은 OAuth 인증이 있는 경우
-- **Z.AI / MiniMax / Kimi / OpenCode Go**: 활성화되어 있고, 유효하며 비활성화되지 않은 API 키 인증이 있는 경우
+- **Claude / Codex / Kimi / xAI Grok**: 활성화되어 있고, 유효하며 비활성화되지 않고 만료되지 않은 OAuth 인증이 있는 경우. Kimi의 기존 API 키 사용자는 자동으로 격리되고 **Re-login required** 상태로 표시됩니다.
+- **Z.AI / MiniMax / OpenCode Go**: 활성화되어 있고, 유효하며 비활성화되지 않은 API 키 인증이 있는 경우
 
-비활성화되었거나, 인증이 없거나, OAuth가 만료되었거나, API 키가 비어 있거나 누락된 provider는 `/v1/models` 응답과 생성된 config 모델 목록에서 제외됩니다.
+비활성화되었거나, 인증이 없거나, OAuth가 만료되었거나, Z.AI / MiniMax / OpenCode Go용 API 키 자격 증명이 비어 있거나 누락된 provider는 `/v1/models` 응답과 생성된 config 모델 목록에서 제외됩니다.
 
 ## 참고 사항
 
