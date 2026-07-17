@@ -378,7 +378,6 @@ func mergeCatalogs(
 
     guard !mergedModels.isEmpty else { return nil }
 
-    // Sort all model entries by ID within each provider
     for provider in mergedModels.keys {
         mergedModels[provider]?.sort { $0.id < $1.id }
     }
@@ -401,8 +400,6 @@ func isValidExistingSnapshot(_ url: URL) -> Bool {
         return false
     }
 
-    // Full Codable decode: verifies all required fields exist with correct types,
-    // including nested CatalogModelEntry fields (id, object, created, ownedBy, etc.)
     let snapshot: CatalogSnapshot
     do {
         snapshot = try JSONDecoder().decode(CatalogSnapshot.self, from: data)
@@ -410,7 +407,6 @@ func isValidExistingSnapshot(_ url: URL) -> Bool {
         return false
     }
 
-    // Non-empty schemaVersion
     guard !snapshot.schemaVersion.isEmpty else {
         return false
     }
@@ -421,20 +417,16 @@ func isValidExistingSnapshot(_ url: URL) -> Bool {
         return false
     }
 
-    // Sources must reference at least one known external catalog
     let knownSources: Set<String> = ["models.json", "codex_client_models.json", "models.dev"]
     guard !snapshot.sources.isEmpty,
           snapshot.sources.contains(where: { knownSources.contains($0) }) else {
         return false
     }
 
-    // Non-empty providerModels
     guard !snapshot.providerModels.isEmpty else {
         return false
     }
 
-    // Every provider must have a non-empty model array
-    // and every model entry must have a non-empty ID
     for (_, entries) in snapshot.providerModels {
         guard !entries.isEmpty else { return false }
         for entry in entries {
@@ -450,7 +442,6 @@ func isValidExistingSnapshot(_ url: URL) -> Bool {
 var sources: [String] = []
 var fetchErrors: [String: String] = [:]
 
-// Fetch primary source
 var primaryModels: [String: [CatalogModelEntry]]?
 do {
     let data = try fetchSynchronously(url: modelsJSONURL)
@@ -464,7 +455,6 @@ do {
     fputs("⚠ Failed to fetch models.json: \(error.localizedDescription)\n", stderr)
 }
 
-// Fetch codex client models
 var codexClientModels: [String: [CatalogModelEntry]]?
 do {
     let data = try fetchSynchronously(url: codexClientURL)
@@ -478,7 +468,6 @@ do {
     fputs("⚠ Failed to fetch codex_client_models.json: \(error.localizedDescription)\n", stderr)
 }
 
-// Fetch secondary source
 var secondaryModels: [String: [CatalogModelEntry]]?
 do {
     let data = try fetchSynchronously(url: modelsDevURL)
@@ -492,16 +481,13 @@ do {
     fputs("⚠ Failed to fetch models.dev: \(error.localizedDescription)\n", stderr)
 }
 
-// Merge sources
 guard let merged = mergeCatalogs(
     primary: primaryModels,
     codexClient: codexClientModels,
     secondary: secondaryModels
 ) else {
-    // All sources failed to produce a valid merged catalog
     fputs("⚠ All external sources failed to produce a valid catalog\n", stderr)
 
-    // Check for existing valid snapshot
     let existingURL = URL(fileURLWithPath: snapshotOutputPath)
     if isValidExistingSnapshot(existingURL) {
         fputs("✓ Reusing existing valid snapshot at \(snapshotOutputPath)\n", stdout)
@@ -519,7 +505,6 @@ let outputURL = URL(fileURLWithPath: snapshotOutputPath)
 let encoder = JSONEncoder()
 encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
 
-// Encode new providerModels via Codable for deterministic comparison
 let newSnapshot = CatalogSnapshot(
     schemaVersion: "2",
     generatedAt: "",
@@ -534,7 +519,6 @@ guard let newEncoded = try? encoder.encode(newSnapshot),
 }
 let newPmData = try? JSONSerialization.data(withJSONObject: newPm, options: [.sortedKeys])
 
-// Load existing snapshot's generatedAt and providerModels for comparison
 var existingGeneratedAt: String? = nil
 var existingPmData: Data? = nil
 if let existingData = try? Data(contentsOf: outputURL),
@@ -572,7 +556,6 @@ guard let snapshotData = try? encoder.encode(snapshot) else {
 // Skip write entirely when encoded output matches existing file byte-for-byte
 if let existingData = try? Data(contentsOf: outputURL), existingData == snapshotData {
     fputs("✓ Snapshot unchanged; skipping write\n", stdout)
-    // Fall through to success summary
 } else {
     // Atomic write: write to temp file, validate, then atomically replace
     let tempURL = outputURL.deletingLastPathComponent()
@@ -582,10 +565,8 @@ if let existingData = try? Data(contentsOf: outputURL), existingData == snapshot
         let parentDir = outputURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
 
-        // Write to temp file first
         try snapshotData.write(to: tempURL)
 
-        // Validate temp file parses as valid JSON before replacing existing
         guard let validationData = try? Data(contentsOf: tempURL),
               let _ = try? JSONSerialization.jsonObject(with: validationData) else {
             fputs("✗ Temp file validation failed\n", stderr)
@@ -604,7 +585,6 @@ if let existingData = try? Data(contentsOf: outputURL), existingData == snapshot
         }
     } catch {
         fputs("✗ Failed to write snapshot: \(error.localizedDescription)\n", stderr)
-        // Clean up temp file
         try? FileManager.default.removeItem(at: tempURL)
         exit(1)
     }

@@ -102,6 +102,22 @@ extract_field() {
     fi
 }
 
+run_generator() {
+    local output_path="$1"
+    local models_url="$2"
+    local codex_url="$3"
+    local dev_url="$4"
+
+    set +e
+    MODEL_CATALOG_OUTPUT_PATH="$output_path" \
+    MODEL_CATALOG_MODELS_JSON_URL="$models_url" \
+    MODEL_CATALOG_CODEX_CLIENT_URL="$codex_url" \
+    MODEL_CATALOG_MODELS_DEV_URL="$dev_url" \
+    swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
+    LAST_EXIT_CODE=$?
+    set -e
+}
+
 # ---- Test 1: All sources fail + valid existing snapshot => exit 0, file unchanged ----
 
 echo ""
@@ -114,14 +130,8 @@ SNAPSHOTEOT
 
 EXISTING_HASH=$(shasum "$OUTPUT1" | awk '{print $1}')
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT1" \
-MODEL_CATALOG_MODELS_JSON_URL="$INVALID_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$INVALID_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$INVALID_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT1" "$INVALID_URL" "$INVALID_URL" "$INVALID_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 NEW_HASH=$(shasum "$OUTPUT1" | awk '{print $1}')
 
@@ -141,14 +151,8 @@ echo "=== Test 2: All sources fail + malformed existing snapshot => exit non-zer
 OUTPUT2="$TMPDIR/test2-snapshot.json"
 echo "{not valid json" > "$OUTPUT2"
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT2" \
-MODEL_CATALOG_MODELS_JSON_URL="$INVALID_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$INVALID_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$INVALID_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT2" "$INVALID_URL" "$INVALID_URL" "$INVALID_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     pass "Test 2: script exited non-zero ($EXIT_CODE) with malformed existing snapshot"
@@ -166,14 +170,8 @@ cat > "$OUTPUT3" << 'SNAPSHOTEOT'
 {"generatedAt":"2026-01-01T00:00:00Z","providerModels":{},"schemaVersion":"2","sources":["models.json","models.dev"]}
 SNAPSHOTEOT
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT3" \
-MODEL_CATALOG_MODELS_JSON_URL="$INVALID_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$INVALID_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$INVALID_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT3" "$INVALID_URL" "$INVALID_URL" "$INVALID_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     pass "Test 3: script exited non-zero ($EXIT_CODE) with empty-providerModels snapshot"
@@ -191,14 +189,8 @@ cat > "$OUTPUT4" << 'SNAPSHOTEOT'
 {"generatedAt":"2026-01-01T00:00:00Z","providerModels":{"claude":[{"created":1,"displayName":null,"id":"claude-sonnet-4","object":"model","ownedBy":"anthropic","supplementalMetadata":{},"tier":null}]},"schemaVersion":"2","sources":["unknown-source"]}
 SNAPSHOTEOT
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT4" \
-MODEL_CATALOG_MODELS_JSON_URL="$INVALID_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$INVALID_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$INVALID_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT4" "$INVALID_URL" "$INVALID_URL" "$INVALID_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     pass "Test 4: script exited non-zero ($EXIT_CODE) with unknown-sources snapshot"
@@ -213,28 +205,16 @@ echo "=== Test 5: Repeated run with same inputs => byte-for-byte identical ==="
 
 OUTPUT5="$TMPDIR/test5-snapshot.json"
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT5" \
-MODEL_CATALOG_MODELS_JSON_URL="$MODELS_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$CODEX_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$DEV_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT5" "$MODELS_URL" "$CODEX_URL" "$DEV_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     fail "Test 5: first run failed with exit code $EXIT_CODE"
 else
     FIRST_HASH=$(shasum "$OUTPUT5" | awk '{print $1}')
 
-    set +e
-    MODEL_CATALOG_OUTPUT_PATH="$OUTPUT5" \
-    MODEL_CATALOG_MODELS_JSON_URL="$MODELS_URL" \
-    MODEL_CATALOG_CODEX_CLIENT_URL="$CODEX_URL" \
-    MODEL_CATALOG_MODELS_DEV_URL="$DEV_URL" \
-    swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-    EXIT_CODE=$?
-    set -e
+    run_generator "$OUTPUT5" "$MODELS_URL" "$CODEX_URL" "$DEV_URL"
+    EXIT_CODE=$LAST_EXIT_CODE
 
     if [ $EXIT_CODE -ne 0 ]; then
         fail "Test 5: second run failed with exit code $EXIT_CODE"
@@ -255,14 +235,8 @@ echo "=== Test 6: generatedAt preserved when content unchanged ==="
 
 OUTPUT6="$TMPDIR/test6-snapshot.json"
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT6" \
-MODEL_CATALOG_MODELS_JSON_URL="$MODELS_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$CODEX_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$DEV_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE_FIRST=$?
-set -e
+run_generator "$OUTPUT6" "$MODELS_URL" "$CODEX_URL" "$DEV_URL"
+EXIT_CODE_FIRST=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE_FIRST -ne 0 ]; then
     fail "Test 6: first run failed with exit code $EXIT_CODE_FIRST"
@@ -272,14 +246,8 @@ else
     # Ensure time has passed so wall-clock would differ without preservation
     sleep 2
 
-    set +e
-    MODEL_CATALOG_OUTPUT_PATH="$OUTPUT6" \
-    MODEL_CATALOG_MODELS_JSON_URL="$MODELS_URL" \
-    MODEL_CATALOG_CODEX_CLIENT_URL="$CODEX_URL" \
-    MODEL_CATALOG_MODELS_DEV_URL="$DEV_URL" \
-    swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-    EXIT_CODE_SECOND=$?
-    set -e
+    run_generator "$OUTPUT6" "$MODELS_URL" "$CODEX_URL" "$DEV_URL"
+    EXIT_CODE_SECOND=$LAST_EXIT_CODE
 
     if [ $EXIT_CODE_SECOND -ne 0 ]; then
         fail "Test 6: second run failed with exit code $EXIT_CODE_SECOND"
@@ -301,26 +269,18 @@ echo "=== Test 7: Sources succeed => valid snapshot with non-empty providerModel
 
 OUTPUT7="$TMPDIR/test7-snapshot.json"
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT7" \
-MODEL_CATALOG_MODELS_JSON_URL="$MODELS_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$CODEX_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$DEV_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT7" "$MODELS_URL" "$CODEX_URL" "$DEV_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     fail "Test 7: script failed with exit code $EXIT_CODE"
 elif [ ! -f "$OUTPUT7" ]; then
     fail "Test 7: output file missing"
 else
-    # Check valid JSON
     if command -v python3 &>/dev/null; then
         if python3 -m json.tool "$OUTPUT7" > /dev/null 2>&1; then
             PM_COUNT=$(python3 -c "import json; d=json.load(open('$OUTPUT7')); print(len(d.get('providerModels',{})))" 2>/dev/null || echo "0")
             if [ "$PM_COUNT" -gt 0 ]; then
-                # Check sources contains known identifiers
                 HAS_KNOWN=$(python3 -c "
 import json
 d=json.load(open('$OUTPUT7'))
@@ -340,7 +300,6 @@ print('yes' if any(s in known for s in sources) else 'no')
             fail "Test 7: output is not valid JSON"
         fi
     else
-        # Fallback without python3: use swift
         VALID=$(swift -e "
 import Foundation
 let d=try Data(contentsOf:URL(fileURLWithPath:\"$OUTPUT7\"))
@@ -366,14 +325,8 @@ echo "=== Test 8: All sources fail + no existing snapshot => exit non-zero ==="
 OUTPUT8="$TMPDIR/test8-snapshot.json"
 # Do NOT create the file
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT8" \
-MODEL_CATALOG_MODELS_JSON_URL="$INVALID_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$INVALID_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$INVALID_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT8" "$INVALID_URL" "$INVALID_URL" "$INVALID_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     pass "Test 8: script exited non-zero ($EXIT_CODE) with no existing snapshot and all sources failed"
@@ -400,14 +353,8 @@ cat > "$OUTPUT9" << 'SNAPSHOTEOT'
 }
 SNAPSHOTEOT
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT9" \
-MODEL_CATALOG_MODELS_JSON_URL="$INVALID_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$INVALID_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$INVALID_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT9" "$INVALID_URL" "$INVALID_URL" "$INVALID_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     pass "Test 9: script exited non-zero ($EXIT_CODE) with model entries missing 'id' field (Codable decode fails)"
@@ -432,14 +379,8 @@ cat > "$OUTPUT10" << 'SNAPSHOTEOT'
 }
 SNAPSHOTEOT
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT10" \
-MODEL_CATALOG_MODELS_JSON_URL="$INVALID_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$INVALID_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$INVALID_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT10" "$INVALID_URL" "$INVALID_URL" "$INVALID_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     pass "Test 10: script exited non-zero ($EXIT_CODE) with all providers having empty model arrays"
@@ -454,19 +395,12 @@ echo "=== Test 11: Generated output is fully Codable-decodable ==="
 
 OUTPUT11="$TMPDIR/test11-snapshot.json"
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT11" \
-MODEL_CATALOG_MODELS_JSON_URL="$MODELS_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$CODEX_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$DEV_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT11" "$MODELS_URL" "$CODEX_URL" "$DEV_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     fail "Test 11: first run failed with exit code $EXIT_CODE"
 else
-    # Verify the output can be fully decoded via Codable by the runtime CatalogSnapshot type
     DECODE_CHECK=$(swift -e "
 import Foundation
 struct CE: Decodable { let id: String; let object: String; let created: Int; let ownedBy: String; let displayName: String?; let tier: String?; let supplementalMetadata: [String: String] }
@@ -484,7 +418,6 @@ print(s.providerModels.isEmpty ? \"empty\" : \"\\(s.providerModels.count)-\\(tot
         PASS_COUNT_DETAILS="$DECODE_CHECK"
         pass "Test 11: generated snapshot fully Codable-decodable ($PASS_COUNT_DETAILS, all model IDs non-empty)"
     else
-        # Check if some IDs are empty
         if [[ "$DECODE_CHECK" == *"-false" ]]; then
             fail "Test 11: generated snapshot decoded but contains empty model IDs"
         else
@@ -512,14 +445,8 @@ cat > "$OUTPUT12" << 'SNAPSHOTEOT'
 }
 SNAPSHOTEOT
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT12" \
-MODEL_CATALOG_MODELS_JSON_URL="$INVALID_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$INVALID_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$INVALID_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT12" "$INVALID_URL" "$INVALID_URL" "$INVALID_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     pass "Test 12: script exited non-zero ($EXIT_CODE) with wrong type for 'created' field (Codable decode fails)"
@@ -547,14 +474,8 @@ cat > "$OUTPUT13" << 'SNAPSHOTEOT'
 }
 SNAPSHOTEOT
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT13" \
-MODEL_CATALOG_MODELS_JSON_URL="$INVALID_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$INVALID_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$INVALID_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT13" "$INVALID_URL" "$INVALID_URL" "$INVALID_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     pass "Test 13: script exited non-zero ($EXIT_CODE) with one valid provider and one empty provider"
@@ -584,14 +505,8 @@ cat > "$OUTPUT14" << 'SNAPSHOTEOT'
 }
 SNAPSHOTEOT
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT14" \
-MODEL_CATALOG_MODELS_JSON_URL="$INVALID_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$INVALID_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$INVALID_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT14" "$INVALID_URL" "$INVALID_URL" "$INVALID_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     pass "Test 14: script exited non-zero ($EXIT_CODE) with one valid provider and one provider with empty model ID"
@@ -621,14 +536,8 @@ cat > "$OUTPUT15" << 'SNAPSHOTEOT'
 }
 SNAPSHOTEOT
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT15" \
-MODEL_CATALOG_MODELS_JSON_URL="$INVALID_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$INVALID_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$INVALID_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT15" "$INVALID_URL" "$INVALID_URL" "$INVALID_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     pass "Test 15: script exited non-zero ($EXIT_CODE) with old-schema '1' snapshot (schema mismatch rejected)"
@@ -643,14 +552,8 @@ echo "=== Test 16: Primary policy includes kimi/xai and excludes unmapped/remove
 
 OUTPUT16="$TMPDIR/test16-snapshot.json"
 
-set +e
-MODEL_CATALOG_OUTPUT_PATH="$OUTPUT16" \
-MODEL_CATALOG_MODELS_JSON_URL="$MODELS_URL" \
-MODEL_CATALOG_CODEX_CLIENT_URL="$CODEX_URL" \
-MODEL_CATALOG_MODELS_DEV_URL="$DEV_URL" \
-swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_generator "$OUTPUT16" "$MODELS_URL" "$CODEX_URL" "$DEV_URL"
+EXIT_CODE=$LAST_EXIT_CODE
 
 if [ $EXIT_CODE -ne 0 ]; then
     fail "Test 16: script failed with exit code $EXIT_CODE"
