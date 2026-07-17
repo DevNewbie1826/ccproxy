@@ -13,22 +13,13 @@ final class ConfigComposerTests: XCTestCase {
     }
 
     private var bundledYAML: String {
-        do {
-            return try String(contentsOfFile: bundledConfigPath, encoding: .utf8)
-        } catch {
-            XCTFail("Bundled config.yaml should be readable: \(error)")
-            return ""
+        get throws {
+            try String(contentsOfFile: bundledConfigPath, encoding: .utf8)
         }
     }
 
     func testCompose_ReplacesManagementSecretWithEscapedValue() throws {
-        let merged = try ConfigComposer.compose(
-            bundledYAML: bundledYAML,
-            userOverlayYAML: nil,
-            upstreams: [],
-            disabledOAuthProviders: [],
-            managementSecretKey: "abc\"\\def\n"
-        )
+        let merged = try compose(managementSecretKey: "abc\"\\def\n")
         let document = try parseMapping(merged)
         let remoteManagement = try XCTUnwrap(document["remote-management"] as? [String: Any])
 
@@ -37,30 +28,19 @@ final class ConfigComposerTests: XCTestCase {
     }
 
     func testCompose_WithNoInputsPreservesBundledConfig() throws {
-        let merged = try ConfigComposer.compose(
-            bundledYAML: bundledYAML,
-            userOverlayYAML: nil,
-            upstreams: [],
-            disabledOAuthProviders: [],
-            managementSecretKey: ""
-        )
+        let bundled = try bundledYAML
+        let merged = try compose(bundledYAML: bundled)
         let document = try parseMapping(merged)
 
         XCTAssertEqual(document["port"] as? Int, 8328)
         XCTAssertEqual(document["host"] as? String, "127.0.0.1")
         XCTAssertEqual(document["force-model-prefix"] as? Bool, true)
-        XCTAssertTrue(yamlMappingsEqual(try parseMapping(bundledYAML), document),
+        XCTAssertTrue(yamlMappingsEqual(try parseMapping(bundled), document),
                       "No-op composition should parse equal to bundled config")
     }
 
     func testCompose_InjectsClaudeAPIKeyEntriesForEachKeyWithoutAliases() throws {
-        let merged = try ConfigComposer.compose(
-            bundledYAML: bundledYAML,
-            userOverlayYAML: nil,
-            upstreams: [zaiUpstream(apiKeys: ["k1", "k2"])],
-            disabledOAuthProviders: [],
-            managementSecretKey: ""
-        )
+        let merged = try compose(upstreams: [zaiUpstream(apiKeys: ["k1", "k2"])])
         let entries = try claudeAPIKeyEntries(from: merged)
 
         XCTAssertEqual(entries.count, 2, "ConfigComposer should emit one claude-api-key entry per API key")
@@ -75,13 +55,7 @@ final class ConfigComposerTests: XCTestCase {
     }
 
     func testCompose_DeduplicatesAPIKeysByKeyAndBaseURLPreservingOrder() throws {
-        let merged = try ConfigComposer.compose(
-            bundledYAML: bundledYAML,
-            userOverlayYAML: nil,
-            upstreams: [zaiUpstream(apiKeys: ["k1", "k1", "k2"])],
-            disabledOAuthProviders: [],
-            managementSecretKey: ""
-        )
+        let merged = try compose(upstreams: [zaiUpstream(apiKeys: ["k1", "k1", "k2"])])
         let entries = try claudeAPIKeyEntries(from: merged)
 
         XCTAssertEqual(entries.map { $0["api-key"] as? String }, ["k1", "k2"],
@@ -89,37 +63,19 @@ final class ConfigComposerTests: XCTestCase {
     }
 
     func testCompose_EmitsExcludedModelsOnlyWhenNonEmpty() throws {
-        let mergedWithExclusions = try ConfigComposer.compose(
-            bundledYAML: bundledYAML,
-            userOverlayYAML: nil,
-            upstreams: [zaiUpstream(apiKeys: ["k1"], excludedModels: ["glm-4-*"])],
-            disabledOAuthProviders: [],
-            managementSecretKey: ""
-        )
+        let mergedWithExclusions = try compose(upstreams: [zaiUpstream(apiKeys: ["k1"], excludedModels: ["glm-4-*"])])
         let excludedEntry = try XCTUnwrap(claudeAPIKeyEntries(from: mergedWithExclusions).first)
         XCTAssertEqual(excludedEntry["excluded-models"] as? [String], ["glm-4-*"],
                        "ConfigComposer should copy non-empty excludedModels to each injected entry")
 
-        let mergedWithoutExclusions = try ConfigComposer.compose(
-            bundledYAML: bundledYAML,
-            userOverlayYAML: nil,
-            upstreams: [zaiUpstream(apiKeys: ["k1"], excludedModels: [])],
-            disabledOAuthProviders: [],
-            managementSecretKey: ""
-        )
+        let mergedWithoutExclusions = try compose(upstreams: [zaiUpstream(apiKeys: ["k1"], excludedModels: [])])
         let plainEntry = try XCTUnwrap(claudeAPIKeyEntries(from: mergedWithoutExclusions).first)
         XCTAssertNil(plainEntry["excluded-models"],
                      "ConfigComposer should omit excluded-models when the upstream has no exclusions")
     }
 
     func testCompose_AddsOAuthExcludedModelsForDisabledProvidersSorted() throws {
-        let merged = try ConfigComposer.compose(
-            bundledYAML: bundledYAML,
-            userOverlayYAML: nil,
-            upstreams: [],
-            disabledOAuthProviders: ["codex", "claude"],
-            managementSecretKey: ""
-        )
+        let merged = try compose(disabledOAuthProviders: ["codex", "claude"])
         let document = try parseMapping(merged)
         let exclusions = try XCTUnwrap(document["oauth-excluded-models"] as? [String: Any])
 
@@ -133,13 +89,7 @@ final class ConfigComposerTests: XCTestCase {
         debug: true
         request-retry: 5
         """
-        let merged = try ConfigComposer.compose(
-            bundledYAML: bundledYAML,
-            userOverlayYAML: overlay,
-            upstreams: [],
-            disabledOAuthProviders: [],
-            managementSecretKey: ""
-        )
+        let merged = try compose(userOverlayYAML: overlay)
         let document = try parseMapping(merged)
 
         XCTAssertEqual(document["debug"] as? Bool, true, "Overlay should add/override scalar debug")
@@ -155,13 +105,7 @@ final class ConfigComposerTests: XCTestCase {
             models:
               - name: m1
         """
-        let merged = try ConfigComposer.compose(
-            bundledYAML: bundledYAML,
-            userOverlayYAML: overlay,
-            upstreams: [zaiUpstream(apiKeys: ["k1"])],
-            disabledOAuthProviders: [],
-            managementSecretKey: ""
-        )
+        let merged = try compose(userOverlayYAML: overlay, upstreams: [zaiUpstream(apiKeys: ["k1"])])
         let entries = try claudeAPIKeyEntries(from: merged)
 
         XCTAssertEqual(entries.count, 2, "Overlay claude-api-key entries and injected entries should coexist")
@@ -172,7 +116,7 @@ final class ConfigComposerTests: XCTestCase {
     }
 
     func testCompose_MergesUnknownNamedArraysByNameWithOverlayWinning() throws {
-        let bundled = bundledYAML + """
+        let bundled = try bundledYAML + """
 
         openai-compatibility:
           - name: shared
@@ -187,12 +131,9 @@ final class ConfigComposerTests: XCTestCase {
           - name: added
             base-url: https://added
         """
-        let merged = try ConfigComposer.compose(
+        let merged = try compose(
             bundledYAML: bundled,
-            userOverlayYAML: overlay,
-            upstreams: [],
-            disabledOAuthProviders: [],
-            managementSecretKey: ""
+            userOverlayYAML: overlay
         )
         let document = try parseMapping(merged)
         let entries = try XCTUnwrap(document["openai-compatibility"] as? [[String: Any]])
@@ -205,13 +146,10 @@ final class ConfigComposerTests: XCTestCase {
 
     func testWriteMergedConfig_WritesMergedConfigWithOwnerOnlyPermissions() throws {
         try withTemporaryAuthDirectory { authDir in
-            let returnedPath = try ConfigComposer.writeMergedConfig(
-                bundledConfigPath: bundledConfigPath,
+            let returnedPath = try writeMergedConfig(
                 authDir: authDir,
                 userConfigPath: nil,
-                upstreams: [zaiUpstream(apiKeys: ["k1"])],
-                disabledOAuthProviders: [],
-                managementSecretKey: ""
+                upstreams: [zaiUpstream(apiKeys: ["k1"])]
             )
             let expectedPath = authDir.appendingPathComponent("merged-config.yaml").path
             let attributes = try FileManager.default.attributesOfItem(atPath: returnedPath)
@@ -224,14 +162,7 @@ final class ConfigComposerTests: XCTestCase {
 
     func testWriteMergedConfig_WithNoInputsAndNoOverlayUsesBundledFastPath() throws {
         try withTemporaryAuthDirectory { authDir in
-            let returnedPath = try ConfigComposer.writeMergedConfig(
-                bundledConfigPath: bundledConfigPath,
-                authDir: authDir,
-                userConfigPath: nil,
-                upstreams: [],
-                disabledOAuthProviders: [],
-                managementSecretKey: ""
-            )
+            let returnedPath = try writeMergedConfig(authDir: authDir, userConfigPath: nil)
             let mergedPath = authDir.appendingPathComponent("merged-config.yaml")
 
             XCTAssertEqual(returnedPath, bundledConfigPath,
@@ -249,14 +180,7 @@ final class ConfigComposerTests: XCTestCase {
             let overlayURL = authDir.appendingPathComponent("overlay.yaml")
             try "request-retry: 5\n".write(to: overlayURL, atomically: true, encoding: .utf8)
 
-            let returnedPath = try ConfigComposer.writeMergedConfig(
-                bundledConfigPath: bundledConfigPath,
-                authDir: authDir,
-                userConfigPath: overlayURL,
-                upstreams: [],
-                disabledOAuthProviders: [],
-                managementSecretKey: ""
-            )
+            let returnedPath = try writeMergedConfig(authDir: authDir, userConfigPath: overlayURL)
             let contents = try String(contentsOfFile: returnedPath, encoding: .utf8)
             let document = try parseMapping(contents)
 
@@ -270,19 +194,48 @@ final class ConfigComposerTests: XCTestCase {
             let overlayURL = authDir.appendingPathComponent("bad-overlay.yaml")
             try "debug: [unterminated\n".write(to: overlayURL, atomically: true, encoding: .utf8)
 
-            XCTAssertThrowsError(try ConfigComposer.writeMergedConfig(
-                bundledConfigPath: bundledConfigPath,
+            XCTAssertThrowsError(try writeMergedConfig(
                 authDir: authDir,
-                userConfigPath: overlayURL,
-                upstreams: [],
-                disabledOAuthProviders: [],
-                managementSecretKey: ""
+                userConfigPath: overlayURL
             ), "Malformed overlay YAML should throw instead of silently falling back")
         }
     }
 }
 
 private extension ConfigComposerTests {
+    func compose(
+        bundledYAML: String? = nil,
+        userOverlayYAML: String? = nil,
+        upstreams: [ClaudeCompatibleUpstream] = [],
+        disabledOAuthProviders: [String] = [],
+        managementSecretKey: String = ""
+    ) throws -> String {
+        try ConfigComposer.compose(
+            bundledYAML: bundledYAML ?? self.bundledYAML,
+            userOverlayYAML: userOverlayYAML,
+            upstreams: upstreams,
+            disabledOAuthProviders: disabledOAuthProviders,
+            managementSecretKey: managementSecretKey
+        )
+    }
+
+    func writeMergedConfig(
+        authDir: URL,
+        userConfigPath: URL?,
+        upstreams: [ClaudeCompatibleUpstream] = [],
+        disabledOAuthProviders: [String] = [],
+        managementSecretKey: String = ""
+    ) throws -> String {
+        try ConfigComposer.writeMergedConfig(
+            bundledConfigPath: bundledConfigPath,
+            authDir: authDir,
+            userConfigPath: userConfigPath,
+            upstreams: upstreams,
+            disabledOAuthProviders: disabledOAuthProviders,
+            managementSecretKey: managementSecretKey
+        )
+    }
+
     func zaiUpstream(apiKeys: [String], excludedModels: [String] = []) -> ClaudeCompatibleUpstream {
         ClaudeCompatibleUpstream(
             prefix: "zai",

@@ -3,19 +3,16 @@ import XCTest
 
 final class AuthStatusTests: XCTestCase {
 
-    /// Verifies ServiceType contains exactly the providers in order.
     func testServiceTypeExactRawValues() {
         let rawValues = ServiceType.allCases.map(\.rawValue)
         XCTAssertEqual(rawValues, ["claude", "codex", "zai", "minimax", "kimi", "opencode-go", "xai"])
     }
 
-    /// Verifies ServiceType display names match the providers.
     func testServiceTypeExactDisplayNames() {
         let names = ServiceType.allCases.map(\.displayName)
         XCTAssertEqual(names, ["Claude Code", "Codex", "Z.AI GLM", "MiniMax", "Kimi", "OpenCode Go", "xAI Grok"])
     }
 
-    /// Verifies that removed provider raw values are absent from ServiceType.
     func testRemovedProviderRawValuesAreAbsent() {
         let rawValues = ServiceType.allCases.map(\.rawValue)
         let removedNeedles = [
@@ -31,7 +28,6 @@ final class AuthStatusTests: XCTestCase {
         }
     }
 
-    /// Verifies that removed provider display name fragments are absent.
     func testRemovedProviderDisplayNamesAreAbsent() {
         let names = ServiceType.allCases.map(\.displayName)
         let removedFragments = [
@@ -51,17 +47,13 @@ final class AuthStatusTests: XCTestCase {
     func testLegacyKimiFileIsQuarantinedAndFlaggedForReLogin() throws {
         try withTemporaryAuthDirectory { authDir in
             let legacyFile = authDir.appendingPathComponent("kimi-legacy.json")
-            try writeCredential([
-                "type": "kimi",
-                "api_key": "legacy-key"
-            ], to: legacyFile)
+            try writeCredential(legacyKimiCredential(), to: legacyFile)
 
             let manager = makeManager(authDir: authDir)
-            manager.checkAuthStatus()
-            waitForAuthStatusUpdate()
+            refreshAuthStatus(manager)
 
-            XCTAssertFalse(FileManager.default.fileExists(atPath: legacyFile.path))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: legacyFile.appendingPathExtension("legacy").path))
+            assertFileMissing(legacyFile)
+            assertFileExists(legacyFile.appendingPathExtension("legacy"))
             XCTAssertTrue(manager.accounts(for: .kimi).isEmpty)
             XCTAssertTrue(manager.providersRequiringReLogin.contains(.kimi))
         }
@@ -70,19 +62,13 @@ final class AuthStatusTests: XCTestCase {
     func testValidOAuthKimiFileIsPreservedAndNotFlagged() throws {
         try withTemporaryAuthDirectory { authDir in
             let oauthFile = authDir.appendingPathComponent("kimi-oauth.json")
-            try writeCredential([
-                "type": "kimi",
-                "access_token": "access-token",
-                "refresh_token": "refresh-token",
-                "expired": "2999-01-01T00:00:00Z"
-            ], to: oauthFile)
+            try writeCredential(kimiOAuthCredential(), to: oauthFile)
 
             let manager = makeManager(authDir: authDir)
-            manager.checkAuthStatus()
-            waitForAuthStatusUpdate()
+            refreshAuthStatus(manager)
 
-            XCTAssertTrue(FileManager.default.fileExists(atPath: oauthFile.path))
-            XCTAssertFalse(FileManager.default.fileExists(atPath: oauthFile.appendingPathExtension("legacy").path))
+            assertFileExists(oauthFile)
+            assertFileMissing(oauthFile.appendingPathExtension("legacy"))
             XCTAssertEqual(manager.accounts(for: .kimi).map(\.id), ["kimi-oauth.json"])
             XCTAssertFalse(manager.providersRequiringReLogin.contains(.kimi))
         }
@@ -91,22 +77,16 @@ final class AuthStatusTests: XCTestCase {
     func testExpiredOAuthKimiFileIsPreservedAndNotFlagged() throws {
         try withTemporaryAuthDirectory { authDir in
             let oauthFile = authDir.appendingPathComponent("kimi-expired.json")
-            try writeCredential([
-                "type": "kimi",
-                "access_token": "access-token",
-                "refresh_token": "refresh-token",
-                "expired": "2000-01-01T00:00:00Z"
-            ], to: oauthFile)
+            try writeCredential(kimiOAuthCredential(expired: "2000-01-01T00:00:00Z"), to: oauthFile)
 
             let manager = makeManager(authDir: authDir)
-            manager.checkAuthStatus()
-            waitForAuthStatusUpdate()
+            refreshAuthStatus(manager)
 
             let accounts = manager.accounts(for: .kimi)
             XCTAssertEqual(accounts.map(\.id), ["kimi-expired.json"])
             XCTAssertTrue(accounts.first?.isExpired ?? false)
-            XCTAssertTrue(FileManager.default.fileExists(atPath: oauthFile.path))
-            XCTAssertFalse(FileManager.default.fileExists(atPath: oauthFile.appendingPathExtension("legacy").path))
+            assertFileExists(oauthFile)
+            assertFileMissing(oauthFile.appendingPathExtension("legacy"))
             XCTAssertFalse(manager.providersRequiringReLogin.contains(.kimi))
         }
     }
@@ -114,22 +94,15 @@ final class AuthStatusTests: XCTestCase {
     func testDisabledValidOAuthKimiFileIsPreservedAndNotFlagged() throws {
         try withTemporaryAuthDirectory { authDir in
             let oauthFile = authDir.appendingPathComponent("kimi-disabled.json")
-            try writeCredential([
-                "type": "kimi",
-                "access_token": "access-token",
-                "refresh_token": "refresh-token",
-                "expired": "2999-01-01T00:00:00Z",
-                "disabled": true
-            ], to: oauthFile)
+            try writeCredential(kimiOAuthCredential(disabled: true), to: oauthFile)
 
             let manager = makeManager(authDir: authDir)
-            manager.checkAuthStatus()
-            waitForAuthStatusUpdate()
+            refreshAuthStatus(manager)
 
             let accounts = manager.accounts(for: .kimi)
             XCTAssertEqual(accounts.map(\.id), ["kimi-disabled.json"])
             XCTAssertTrue(accounts.first?.isDisabled ?? false)
-            XCTAssertTrue(FileManager.default.fileExists(atPath: oauthFile.path))
+            assertFileExists(oauthFile)
             XCTAssertFalse(manager.providersRequiringReLogin.contains(.kimi))
         }
     }
@@ -137,20 +110,15 @@ final class AuthStatusTests: XCTestCase {
     func testLegacyKimiMigrationIsIdempotentAndFlagStateStable() throws {
         try withTemporaryAuthDirectory { authDir in
             let legacyFile = authDir.appendingPathComponent("kimi-idempotent.json")
-            try writeCredential([
-                "type": "kimi",
-                "api_key": "legacy-key"
-            ], to: legacyFile)
+            try writeCredential(legacyKimiCredential(), to: legacyFile)
 
             let manager = makeManager(authDir: authDir)
-            manager.checkAuthStatus()
-            waitForAuthStatusUpdate()
-            manager.checkAuthStatus()
-            waitForAuthStatusUpdate()
+            refreshAuthStatus(manager)
+            refreshAuthStatus(manager)
 
-            XCTAssertFalse(FileManager.default.fileExists(atPath: legacyFile.path))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: legacyFile.appendingPathExtension("legacy").path))
-            XCTAssertFalse(FileManager.default.fileExists(atPath: legacyFile.appendingPathExtension("legacy.1").path))
+            assertFileMissing(legacyFile)
+            assertFileExists(legacyFile.appendingPathExtension("legacy"))
+            assertFileMissing(legacyFile.appendingPathExtension("legacy.1"))
             XCTAssertTrue(manager.accounts(for: .kimi).isEmpty)
             XCTAssertTrue(manager.providersRequiringReLogin.contains(.kimi))
         }
@@ -160,19 +128,15 @@ final class AuthStatusTests: XCTestCase {
         try withTemporaryAuthDirectory { authDir in
             let legacyFile = authDir.appendingPathComponent("kimi-collision.json")
             let existingLegacyFile = legacyFile.appendingPathExtension("legacy")
-            try writeCredential([
-                "type": "kimi",
-                "api_key": "legacy-key"
-            ], to: legacyFile)
+            try writeCredential(legacyKimiCredential(), to: legacyFile)
             try "already quarantined".write(to: existingLegacyFile, atomically: true, encoding: .utf8)
 
             let manager = makeManager(authDir: authDir)
-            manager.checkAuthStatus()
-            waitForAuthStatusUpdate()
+            refreshAuthStatus(manager)
 
-            XCTAssertFalse(FileManager.default.fileExists(atPath: legacyFile.path))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: existingLegacyFile.path))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: legacyFile.appendingPathExtension("legacy.1").path))
+            assertFileMissing(legacyFile)
+            assertFileExists(existingLegacyFile)
+            assertFileExists(legacyFile.appendingPathExtension("legacy.1"))
             XCTAssertTrue(manager.providersRequiringReLogin.contains(.kimi))
         }
     }
@@ -186,11 +150,10 @@ final class AuthStatusTests: XCTestCase {
             ], to: zaiFile)
 
             let manager = makeManager(authDir: authDir)
-            manager.checkAuthStatus()
-            waitForAuthStatusUpdate()
+            refreshAuthStatus(manager)
 
-            XCTAssertTrue(FileManager.default.fileExists(atPath: zaiFile.path))
-            XCTAssertFalse(FileManager.default.fileExists(atPath: zaiFile.appendingPathExtension("legacy").path))
+            assertFileExists(zaiFile)
+            assertFileMissing(zaiFile.appendingPathExtension("legacy"))
             XCTAssertEqual(manager.accounts(for: .zai).map(\.id), ["zai-api-key.json"])
             XCTAssertTrue(manager.providersRequiringReLogin.isEmpty)
         }
@@ -199,20 +162,13 @@ final class AuthStatusTests: XCTestCase {
     func testKimiFileWithApiKeyAndAccessTokenIsTreatedAsOAuth() throws {
         try withTemporaryAuthDirectory { authDir in
             let oauthFile = authDir.appendingPathComponent("kimi-mixed.json")
-            try writeCredential([
-                "type": "kimi",
-                "api_key": "legacy-key",
-                "access_token": "access-token",
-                "refresh_token": "refresh-token",
-                "expired": "2999-01-01T00:00:00Z"
-            ], to: oauthFile)
+            try writeCredential(kimiOAuthCredential(apiKey: "legacy-key"), to: oauthFile)
 
             let manager = makeManager(authDir: authDir)
-            manager.checkAuthStatus()
-            waitForAuthStatusUpdate()
+            refreshAuthStatus(manager)
 
-            XCTAssertTrue(FileManager.default.fileExists(atPath: oauthFile.path))
-            XCTAssertFalse(FileManager.default.fileExists(atPath: oauthFile.appendingPathExtension("legacy").path))
+            assertFileExists(oauthFile)
+            assertFileMissing(oauthFile.appendingPathExtension("legacy"))
             XCTAssertEqual(manager.accounts(for: .kimi).map(\.id), ["kimi-mixed.json"])
             XCTAssertFalse(manager.providersRequiringReLogin.contains(.kimi))
         }
@@ -221,26 +177,16 @@ final class AuthStatusTests: XCTestCase {
     func testKimiReLoginFlagClearsAfterValidOAuthFileAppears() throws {
         try withTemporaryAuthDirectory { authDir in
             let legacyFile = authDir.appendingPathComponent("kimi-old.json")
-            try writeCredential([
-                "type": "kimi",
-                "api_key": "legacy-key"
-            ], to: legacyFile)
+            try writeCredential(legacyKimiCredential(), to: legacyFile)
 
             let manager = makeManager(authDir: authDir)
-            manager.checkAuthStatus()
-            waitForAuthStatusUpdate()
+            refreshAuthStatus(manager)
             XCTAssertTrue(manager.providersRequiringReLogin.contains(.kimi))
 
             let oauthFile = authDir.appendingPathComponent("kimi-oauth.json")
-            try writeCredential([
-                "type": "kimi",
-                "access_token": "access-token",
-                "refresh_token": "refresh-token",
-                "expired": "2999-01-01T00:00:00Z"
-            ], to: oauthFile)
+            try writeCredential(kimiOAuthCredential(), to: oauthFile)
 
-            manager.checkAuthStatus()
-            waitForAuthStatusUpdate()
+            refreshAuthStatus(manager)
 
             XCTAssertEqual(manager.accounts(for: .kimi).map(\.id), ["kimi-oauth.json"])
             XCTAssertFalse(manager.providersRequiringReLogin.contains(.kimi))
@@ -269,11 +215,51 @@ private extension AuthStatusTests {
         try data.write(to: file, options: .atomic)
     }
 
-    func waitForAuthStatusUpdate(file: StaticString = #filePath, line: UInt = #line) {
+    func legacyKimiCredential() -> [String: Any] {
+        [
+            "type": "kimi",
+            "api_key": "legacy-key"
+        ]
+    }
+
+    func kimiOAuthCredential(expired: String = "2999-01-01T00:00:00Z",
+                             disabled: Bool = false,
+                             apiKey: String? = nil) -> [String: Any] {
+        var credential: [String: Any] = [
+            "type": "kimi",
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "expired": expired
+        ]
+        if disabled {
+            credential["disabled"] = true
+        }
+        if let apiKey {
+            credential["api_key"] = apiKey
+        }
+        return credential
+    }
+
+    func refreshAuthStatus(_ manager: AuthManager) {
+        manager.checkAuthStatus()
         let expectation = expectation(description: "AuthManager main-queue update")
         DispatchQueue.main.async {
             expectation.fulfill()
         }
         wait(for: [expectation], timeout: 1.0)
+    }
+
+    func assertFileExists(_ url: URL, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path),
+                      "Expected file to exist: \(url.path)",
+                      file: file,
+                      line: line)
+    }
+
+    func assertFileMissing(_ url: URL, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path),
+                       "Expected file to be missing: \(url.path)",
+                       file: file,
+                       line: line)
     }
 }

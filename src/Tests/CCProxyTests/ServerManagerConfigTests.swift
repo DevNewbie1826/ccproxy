@@ -70,7 +70,6 @@ final class ServerManagerConfigTests: XCTestCase {
         }
     }
 
-    /// Generated config must not contain the obsolete timeout key removed from bundled config.
     func testGeneratedConfigDoesNotContainRequestTimeout() {
         withTemporaryAuthDirectory { authDir in
             let obsoleteTimeoutKey = "request" + "-" + "timeout"
@@ -86,8 +85,6 @@ final class ServerManagerConfigTests: XCTestCase {
         }
     }
 
-    /// Generated config must include exactly one top-level `force-model-prefix: true` key
-    /// so prefixed provider models are exposed only through their provider-prefixed IDs.
     func testGeneratedConfigIncludesForceModelPrefix() {
         withTemporaryAuthDirectory { authDir in
             writeCredential(provider: "zai", apiKey: "test-key", authDir: authDir)
@@ -127,7 +124,6 @@ final class ServerManagerConfigTests: XCTestCase {
             XCTAssertEqual(exclusions["xai"] as? [String], ["*"],
                            "Disabled 'xai' provider should have wildcard exclusion")
 
-            // Verify removed provider OAuth keys are absent
             let removedNeedles = [
                 "ge" + "mi" + "ni-cli",
                 "gi" + "thub-" + "co" + "pilot",
@@ -141,7 +137,6 @@ final class ServerManagerConfigTests: XCTestCase {
         }
     }
 
-    /// Verifies oauthProviderKeys contains the provider keys supported by OAuth config exclusions.
     func testOAuthProviderKeysContainSupportedOAuthProviders() {
         XCTAssertEqual(ServerManager.oauthProviderKeys, [
             "claude": "claude",
@@ -151,7 +146,6 @@ final class ServerManagerConfigTests: XCTestCase {
         ])
     }
 
-    /// Verifies the bundled config.yaml does not contain retired entries.
     func testBundledConfigOmitsRetiredEntries() {
         let configPath = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -165,7 +159,6 @@ final class ServerManagerConfigTests: XCTestCase {
             return
         }
 
-        // Build removed config-key needle from fragments
         let retiredConfigKey = ["generative", "language", "api", "key"].joined(separator: "-")
         XCTAssertFalse(contents.contains(retiredConfigKey),
                        "Bundled config must not contain retired config key")
@@ -182,7 +175,6 @@ final class ServerManagerConfigTests: XCTestCase {
         }
     }
 
-    /// Verifies active source and test files do not contain removed provider names.
     func testActiveSourceAndTestsDoNotContainRemovedProviderNames() {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -222,9 +214,6 @@ final class ServerManagerConfigTests: XCTestCase {
         }
     }
 
-    /// Validation path: no existing YAML parser dependency is available in this package.
-    /// This uses an independent narrow double-quoted scalar decoder, not production encoding.
-    /// Residual risk: this helper is not a general YAML parser.
     func testSpecialCharacterApiKeyRoundTrip() {
         let testCases: [(name: String, apiKey: String)] = [
             ("colon", "key:with:colons"),
@@ -412,8 +401,6 @@ final class ServerManagerConfigTests: XCTestCase {
     /// the connected-provider set excludes that provider.
     func testConnectedProviderExcludesOAuthWhenNoAuthFile() {
         withTemporaryAuthDirectory { authDir in
-            // No auth files at all
-
             let manager = makeManager(authDir: authDir)
             let connected = manager.connectedProviders(now: fixedNow)
 
@@ -448,15 +435,12 @@ final class ServerManagerConfigTests: XCTestCase {
     /// the connected-provider set excludes that provider.
     func testConnectedProviderExcludesOAuthWhenAllExpired() {
         withTemporaryAuthDirectory { authDir in
-            // Expired before fixedNow
             writeOAuthCredential(provider: "claude", authDir: authDir,
                                  expired: "2020-01-01T00:00:00Z")
-            // Expired before fixedNow (using a date 1 minute before fixedNow)
             writeOAuthCredential(provider: "codex", authDir: authDir,
                                  expired: "2026-05-31T23:59:00Z")
 
             let manager = makeManager(authDir: authDir)
-            // fixedNow is 2026-06-01T00:00:00Z, both expired dates are before it
             let connected = manager.connectedProviders(now: fixedNow)
 
             XCTAssertFalse(connected.contains(.claude),
@@ -469,7 +453,6 @@ final class ServerManagerConfigTests: XCTestCase {
     /// OAuth credentials with expiration exactly at the injected now are treated as expired.
     func testConnectedProviderExcludesOAuthWhenExpirationEqualsNow() {
         withTemporaryAuthDirectory { authDir in
-            // Create a credential whose expiration matches the injected now exactly
             let expiredDate = fixedNow
             let formatter = ISO8601DateFormatter()
             formatter.formatOptions = [.withInternetDateTime]
@@ -591,7 +574,6 @@ final class ServerManagerConfigTests: XCTestCase {
     /// when valid auth or API-key credentials exist.
     func testConnectedProviderExcludesDisabledProviderEvenWithValidCredentials() {
         withTemporaryAuthDirectory { authDir in
-            // Write valid credentials for all providers
             writeOAuthCredential(provider: "claude", authDir: authDir,
                                  expired: "2099-12-31T23:59:59Z")
             writeOAuthCredential(provider: "codex", authDir: authDir,
@@ -607,7 +589,6 @@ final class ServerManagerConfigTests: XCTestCase {
             writeCredential(provider: "opencode-go", apiKey: "ocg-key", authDir: authDir)
 
             let manager = makeManager(authDir: authDir)
-            // Disable all providers
             for serviceType in ServiceType.allCases {
                 manager.enabledProviders[serviceType.rawValue] = false
             }
@@ -623,7 +604,6 @@ final class ServerManagerConfigTests: XCTestCase {
     /// connected-provider set even when enabled.
     func testConnectedProviderExcludesNoAuthNoKeyProviderWhenEnabled() {
         withTemporaryAuthDirectory { authDir in
-            // Enabled but no credential files at all
             let manager = makeManager(authDir: authDir)
             let connected = manager.connectedProviders(now: fixedNow)
 
@@ -712,7 +692,7 @@ final class ServerManagerConfigTests: XCTestCase {
         }
     }
 
-    // MARK: - Task 5: Catalog-Backed Config Model Names
+    // MARK: - Catalog-Backed Config Model Names
 
     /// Z.AI config model names come from injected catalog data, not static Swift arrays.
     /// When catalogModelsOverride provides ZAI model names, those exact names appear in config.
@@ -786,12 +766,6 @@ final class ServerManagerConfigTests: XCTestCase {
         }
     }
 
-    /// When no catalogModelsOverride is provided, config model names come from the
-    /// bundled catalog snapshot rather than hardcoded Swift arrays. This proves the
-    /// runtime config path derives model lists from the external catalog.
-    /// The bundled snapshot has more models than the old static arrays ever did,
-    /// so we verify that the config contains catalog-specific model names that were
-    /// never in the static arrays.
     func testNoStaticModelFallbackWithoutCatalogOverride() {
         withTemporaryAuthDirectory { authDir in
             writeCredential(provider: "zai", apiKey: "zai-test-key", authDir: authDir)
@@ -799,8 +773,6 @@ final class ServerManagerConfigTests: XCTestCase {
             writeCredential(provider: "kimi", apiKey: "kimi-test-key", authDir: authDir)
 
             let manager = makeManager(authDir: authDir)
-            // Explicitly do NOT set catalogModelsOverride
-            // The config should use bundled snapshot models, not hardcoded arrays
 
             let configPath = manager.getConfigPath()
 
@@ -809,21 +781,9 @@ final class ServerManagerConfigTests: XCTestCase {
             let zaiModelNames = modelNames(in: entry(withPrefix: "zai", in: entries))
             let minimaxModelNames = modelNames(in: entry(withPrefix: "minimax", in: entries))
 
-            // The bundled snapshot contains ZAI models beyond the old static list.
-            // Verify that models NOT in the old static list appear in config,
-            // proving the source is the catalog, not the hardcoded arrays.
-            // Old static ZAI list was: glm-5.1, glm-5, glm-5-turbo, glm-5v-turbo,
-            //   glm-4.7, glm-4.7-flash, glm-4.6v, glm-4.5-air
-            // The external catalog also has glm-4.5-air but we verify it includes
-            // catalog-derived models by checking the config has model name entries.
-
-            // The config must have model names from the bundled snapshot for each provider.
-            // Verify that the ZAI block contains at least the basic model "glm-5.1"
             XCTAssertTrue(zaiModelNames.contains("glm-5.1"),
                            "Config should contain catalog-derived ZAI model name glm-5.1")
 
-            // Verify the old static MiniMax list only had "MiniMax-M2.7".
-            // The catalog should still provide it (or more).
             XCTAssertTrue(minimaxModelNames.contains("MiniMax-M2.7"),
                            "Config should contain catalog-derived MiniMax model name")
         }
@@ -866,13 +826,11 @@ final class ServerManagerConfigTests: XCTestCase {
         withTemporaryAuthDirectory { authDir in
             writeCredential(provider: "zai", apiKey: "zai-test-key", authDir: authDir)
 
-            // Write a runtime cache with a unique model name not in the bundled snapshot
             writeRuntimeCacheFile(authDir: authDir, providerModels: [
                 "zai": ["runtime-exclusive-model"]
             ])
 
             let manager = makeManager(authDir: authDir)
-            // Explicitly do NOT set catalogModelsOverride — should read from runtime cache
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
@@ -891,14 +849,12 @@ final class ServerManagerConfigTests: XCTestCase {
         withTemporaryAuthDirectory { authDir in
             writeCredential(provider: "zai", apiKey: "zai-test-key", authDir: authDir)
 
-            // Write initial runtime cache
             writeRuntimeCacheFile(authDir: authDir, providerModels: [
                 "zai": ["cache-v1-model"]
             ])
 
             let manager = makeManager(authDir: authDir)
 
-            // First config generation — should use initial cache
             let configPath1 = manager.getConfigPath()
             guard let contents1 = readConfig(at: configPath1) else { return }
             let entries1 = claudeAPIKeyEntries(from: contents1)
@@ -906,12 +862,10 @@ final class ServerManagerConfigTests: XCTestCase {
             XCTAssertTrue(modelNames1.contains("cache-v1-model"),
                           "First config should contain cache-v1-model")
 
-            // Update the runtime cache file with a different model
             writeRuntimeCacheFile(authDir: authDir, providerModels: [
                 "zai": ["cache-v2-model"]
             ])
 
-            // Second config generation — should reflect the updated cache
             let configPath2 = manager.getConfigPath()
             guard let contents2 = readConfig(at: configPath2) else { return }
             let entries2 = claudeAPIKeyEntries(from: contents2)
@@ -929,7 +883,6 @@ final class ServerManagerConfigTests: XCTestCase {
         withTemporaryAuthDirectory { authDir in
             writeCredential(provider: "zai", apiKey: "zai-test-key", authDir: authDir)
 
-            // Write invalid (corrupt) runtime cache
             let corruptData = "not valid json".data(using: .utf8)!
             let cacheFile = authDir.appendingPathComponent("model-catalog-cache.json")
             try! corruptData.write(to: cacheFile)
@@ -941,7 +894,6 @@ final class ServerManagerConfigTests: XCTestCase {
             let entries = claudeAPIKeyEntries(from: contents)
             let modelNames = modelNames(in: entry(withPrefix: "zai", in: entries))
 
-            // Should fall back to bundled snapshot — which contains glm-5.1
             XCTAssertTrue(modelNames.contains("glm-5.1"),
                            "Config should fall back to bundled snapshot when runtime cache is invalid")
         }
@@ -1050,8 +1002,6 @@ final class ServerManagerConfigTests: XCTestCase {
             guard let contents = readConfig(at: configPath) else { return }
             let entries = claudeAPIKeyEntries(from: contents)
 
-            // The key should NOT appear under the zai prefix (wrong provider)
-            // but MAY appear under the minimax prefix (correct JSON type)
             XCTAssertNil(entry(withPrefix: "zai", in: entries),
                            "Config must not emit zai block for mismatched type file")
         }
@@ -1070,8 +1020,6 @@ final class ServerManagerConfigTests: XCTestCase {
             guard let contents = readConfig(at: configPath) else { return }
             let entries = claudeAPIKeyEntries(from: contents)
 
-            // The key should NOT appear under the kimi prefix (wrong provider)
-            // but MAY appear under the zai prefix (correct JSON type)
             XCTAssertNil(entry(withPrefix: "kimi", in: entries),
                            "Config must not emit kimi block for mismatched type file")
         }
@@ -1107,8 +1055,6 @@ final class ServerManagerConfigTests: XCTestCase {
         for providerType in providers {
             XCTContext.runActivity(named: "Valid type with unexpected filename for \(providerType)") { _ in
                 withTemporaryAuthDirectory { authDir in
-                    // Write a credential with an unexpected filename (e.g. "backup-xxx.json")
-                    // but correct JSON "type" field
                     writeCredentialWithFilename(
                         filename: "backup-\(UUID().uuidString).json",
                         provider: providerType,
@@ -1273,7 +1219,6 @@ final class ServerManagerConfigTests: XCTestCase {
     /// backward compatibility.
     func testConnectedProviderIncludesOAuthWhenNoExpirationFields() {
         withTemporaryAuthDirectory { authDir in
-            // Write an OAuth credential with no expired/expires_at/expiresAt/expiration
             writeOAuthCredential(provider: "claude", authDir: authDir, expired: nil)
 
             let manager = makeManager(authDir: authDir)
@@ -1304,9 +1249,9 @@ final class ServerManagerConfigTests: XCTestCase {
 }
 
 extension ServerManagerConfigTests {
-    private func makeManager(authDir: URL, bundledConfigPath: String? = nil) -> ServerManager {
+    private func makeManager(authDir: URL) -> ServerManager {
         let manager = ServerManager()
-        manager.bundledConfigPathOverride = bundledConfigPath ?? fixtureConfigPath
+        manager.bundledConfigPathOverride = fixtureConfigPath
         manager.authDirectoryOverride = authDir
         return manager
     }
@@ -1325,21 +1270,6 @@ extension ServerManagerConfigTests {
         body(authDir)
     }
 
-    private func writeTemporaryConfig(contents: String) -> URL {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-config-\(UUID().uuidString)", isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            let configURL = root.appendingPathComponent("config.yaml")
-            try contents.write(to: configURL, atomically: true, encoding: .utf8)
-            addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-            return configURL
-        } catch {
-            XCTFail("Failed to create temporary config fixture: \(error)")
-            return URL(fileURLWithPath: fixtureConfigPath)
-        }
-    }
-
     private func writeCredential(provider: String, apiKey: String,
                                  disabled: Bool = false, authDir: URL) {
         let file = authDir.appendingPathComponent("\(provider)-test-\(UUID().uuidString).json")
@@ -1353,12 +1283,8 @@ extension ServerManagerConfigTests {
             credential["disabled"] = true
         }
 
-        do {
-            let data = try JSONSerialization.data(withJSONObject: credential, options: .prettyPrinted)
-            try data.write(to: file)
-        } catch {
-            XCTFail("Failed to write isolated auth fixture for \(provider): \(error)")
-        }
+        writeCredentialFixture(file: file, credential: credential,
+                               failureMessage: "Failed to write isolated auth fixture for \(provider)")
     }
 
     private func writeOAuthCredential(provider: String, authDir: URL,
@@ -1383,12 +1309,8 @@ extension ServerManagerConfigTests {
             credential["expired"] = expired
         }
 
-        do {
-            let data = try JSONSerialization.data(withJSONObject: credential, options: .prettyPrinted)
-            try data.write(to: file)
-        } catch {
-            XCTFail("Failed to write OAuth credential for \(provider): \(error)")
-        }
+        writeCredentialFixture(file: file, credential: credential,
+                               failureMessage: "Failed to write OAuth credential for \(provider)")
     }
 
     private func writeMismatchedCredential(filenamePrefix: String, actualType: String,
@@ -1400,12 +1322,8 @@ extension ServerManagerConfigTests {
             "api_key": apiKey,
             "created": "2026-04-01T00:00:00Z"
         ]
-        do {
-            let data = try JSONSerialization.data(withJSONObject: credential, options: .prettyPrinted)
-            try data.write(to: file)
-        } catch {
-            XCTFail("Failed to write mismatched credential: \(error)")
-        }
+        writeCredentialFixture(file: file, credential: credential,
+                               failureMessage: "Failed to write mismatched credential")
     }
 
     private func writeCredentialWithFilename(filename: String, provider: String,
@@ -1417,12 +1335,8 @@ extension ServerManagerConfigTests {
             "api_key": apiKey,
             "created": "2026-04-01T00:00:00Z"
         ]
-        do {
-            let data = try JSONSerialization.data(withJSONObject: credential, options: .prettyPrinted)
-            try data.write(to: file)
-        } catch {
-            XCTFail("Failed to write credential with custom filename: \(error)")
-        }
+        writeCredentialFixture(file: file, credential: credential,
+                               failureMessage: "Failed to write credential with custom filename")
     }
 
     private func writeOAuthCredentialWithExpiration(provider: String, authDir: URL,
@@ -1436,11 +1350,16 @@ extension ServerManagerConfigTests {
         ]
         credential[field] = value
 
+        writeCredentialFixture(file: file, credential: credential,
+                               failureMessage: "Failed to write OAuth credential with \(field) for \(provider)")
+    }
+
+    private func writeCredentialFixture(file: URL, credential: [String: Any], failureMessage: String) {
         do {
             let data = try JSONSerialization.data(withJSONObject: credential, options: .prettyPrinted)
             try data.write(to: file)
         } catch {
-            XCTFail("Failed to write OAuth credential with \(field) for \(provider): \(error)")
+            XCTFail("\(failureMessage): \(error)")
         }
     }
 
