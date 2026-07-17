@@ -65,6 +65,8 @@ class ServerManager: ObservableObject {
     /// Test seam: override the bundled config path used by getConfigPath()
     var bundledConfigPathOverride: String?
 
+    var bundledResourcePathOverride: String?
+
     /// Test seam: override the auth directory used by getConfigPath()
     var authDirectoryOverride: URL?
 
@@ -133,9 +135,12 @@ class ServerManager: ObservableObject {
     }
     var onVercelConfigChanged: (() -> Void)?
 
+    private var hasCompletedInitialization = false
+
     /// Shared secret-key for API and dashboard access
     @Published var managementSecretKey: String = "" {
         didSet {
+            guard hasCompletedInitialization else { return }
             UserDefaults.standard.set(managementSecretKey, forKey: "managementSecretKey")
             _ = getConfigPath()
         }
@@ -156,7 +161,9 @@ class ServerManager: ObservableObject {
     /// OAuth provider keys used in config.yaml oauth-excluded-models
     static let oauthProviderKeys: [String: String] = [
         "claude": "claude",
-        "codex": "codex"
+        "codex": "codex",
+        "kimi": "kimi",
+        "xai": "xai"
     ]
 
     init() {
@@ -167,6 +174,7 @@ class ServerManager: ObservableObject {
         vercelGatewayEnabled = UserDefaults.standard.bool(forKey: "vercelGatewayEnabled")
         vercelApiKey = UserDefaults.standard.string(forKey: "vercelApiKey") ?? ""
         managementSecretKey = UserDefaults.standard.string(forKey: "managementSecretKey") ?? ""
+        hasCompletedInitialization = true
     }
 
     /// Check if a provider is enabled (defaults to true if not set)
@@ -374,7 +382,7 @@ class ServerManager: ObservableObject {
         // Terminate any previous auth process before starting a new one
         terminateActiveAuthProcessIfNeeded(reason: "starting a new auth attempt")
         // Use bundled binary from app bundle
-        guard let resourcePath = Bundle.main.resourcePath else {
+        guard let resourcePath = bundledResourcePathOverride ?? Bundle.main.resourcePath else {
             completion(false, "Could not find resource path")
             return
         }
@@ -396,6 +404,10 @@ class ServerManager: ObservableObject {
             authProcess.arguments = ["--config", configPath, "-claude-login"]
         case .codexLogin:
             authProcess.arguments = ["--config", configPath, "-codex-login"]
+        case .kimiLogin:
+            authProcess.arguments = ["--config", configPath, "-kimi-login"]
+        case .xaiLogin:
+            authProcess.arguments = ["--config", configPath, "-xai-login"]
         }
         
         // Create pipes for output
@@ -511,6 +523,14 @@ class ServerManager: ObservableObject {
     }
 
     private func saveApiKey(_ apiKey: String, provider: ServiceType, completion: @escaping (Bool, String) -> Void) {
+        switch provider {
+        case .zai, .minimax, .opencodeGo:
+            break
+        case .claude, .codex, .kimi, .xai:
+            completion(false, "\(provider.displayName) uses OAuth login and cannot save API keys")
+            return
+        }
+
         let authDir = authDirectoryOverride ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
 
         do {
@@ -566,13 +586,10 @@ class ServerManager: ObservableObject {
         }
         let authDir = authDirectoryOverride ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
 
-        // Scan API-key provider auth files using consolidated helper
         let zaiApiKeys = scanApiKeys(for: ServiceType.zai, in: authDir)
         let minimaxApiKeys = scanApiKeys(for: ServiceType.minimax, in: authDir)
-        let kimiApiKeys = scanApiKeys(for: ServiceType.kimi, in: authDir)
         let openCodeGoApiKeys = scanApiKeys(for: ServiceType.opencodeGo, in: authDir)
 
-        // Build list of disabled providers
         var disabledProviders: [String] = []
         for (serviceKey, oauthKey) in Self.oauthProviderKeys {
             if !isProviderEnabled(serviceKey) {
@@ -580,129 +597,52 @@ class ServerManager: ObservableObject {
             }
         }
 
-        // If no provider keys, no disabled providers, and no secret key, use bundled config
-        guard !zaiApiKeys.isEmpty || !minimaxApiKeys.isEmpty || !kimiApiKeys.isEmpty || !openCodeGoApiKeys.isEmpty || !disabledProviders.isEmpty || !managementSecretKey.isEmpty else {
-            return bundledConfigPath
-        }
-
-        // Generate merged config
-        guard let bundledContent = try? String(contentsOfFile: bundledConfigPath, encoding: .utf8) else {
-            return bundledConfigPath
-        }
-
-        let escapedSecret = managementSecretKey
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\t", with: "\\t")
-
-        let baseContent: String
-        if managementSecretKey.isEmpty {
-            baseContent = bundledContent
-        } else {
-            baseContent = bundledContent.replacingOccurrences(
-                of: "secret-key: \"\"",
-                with: "secret-key: \"\(escapedSecret)\""
-            )
-        }
-
-        var additionalConfig = ""
-
-        // Build oauth-excluded-models section for disabled providers
-        if !disabledProviders.isEmpty {
-            additionalConfig += """
-
-# Provider exclusions (auto-added by CCProxy)
-# Disabled providers have all models excluded
-oauth-excluded-models:
-
-"""
-            for provider in disabledProviders.sorted() {
-                additionalConfig += "  \(provider):\n"
-                additionalConfig += "    - \"*\"\n"
-            }
-        }
-
         let hasZai = !zaiApiKeys.isEmpty && isProviderEnabled(ServiceType.zai.rawValue)
         let hasMiniMax = !minimaxApiKeys.isEmpty && isProviderEnabled(ServiceType.minimax.rawValue)
-        let hasKimi = !kimiApiKeys.isEmpty && isProviderEnabled(ServiceType.kimi.rawValue)
         let hasOpenCodeGo = !openCodeGoApiKeys.isEmpty && isProviderEnabled(ServiceType.opencodeGo.rawValue)
 
-        // Build Claude-compatible upstream section for supported providers
-        let claudeCompatibleProviders: [(enabled: Bool, prefix: String, comment: String, baseURL: String, apiKeys: [String], models: [String])] = [
-            (
-                hasZai,
-                "zai",
-                "Z.AI Claude-compatible upstream",
-                "https://api.z.ai/api/anthropic",
-                zaiApiKeys,
-                catalogModelsForPrefix("zai")
-            ),
-            (
-                hasKimi,
-                "kimi",
-                "Kimi Claude-compatible upstream",
-                "https://api.kimi.com/coding/",
-                kimiApiKeys,
-                catalogModelsForPrefix("kimi")
-            ),
-            (
-                hasMiniMax,
-                "minimax",
-                "MiniMax Claude-compatible upstream",
-                "https://api.minimax.io/anthropic",
-                minimaxApiKeys,
-                catalogModelsForPrefix("minimax")
-            ),
-            (
-                hasOpenCodeGo,
-                "opencode-go",
-                "OpenCode Go Claude-compatible upstream",
-                "https://opencode.ai/zen/go/v1/messages",
-                openCodeGoApiKeys,
-                catalogModelsForPrefix("opencode-go").map { modelName in
-                    // Strip exactly one leading "opencode-go/" prefix from catalog IDs
-                    // because prefix + force-model-prefix will add it at runtime.
+        var upstreams: [ClaudeCompatibleUpstream] = []
+        if hasZai {
+            upstreams.append(ClaudeCompatibleUpstream(
+                prefix: "zai",
+                baseURL: "https://api.z.ai/api/anthropic",
+                apiKeys: zaiApiKeys,
+                models: catalogModelsForPrefix("zai")
+            ))
+        }
+        if hasMiniMax {
+            upstreams.append(ClaudeCompatibleUpstream(
+                prefix: "minimax",
+                baseURL: "https://api.minimax.io/anthropic",
+                apiKeys: minimaxApiKeys,
+                models: catalogModelsForPrefix("minimax")
+            ))
+        }
+        if hasOpenCodeGo {
+            upstreams.append(ClaudeCompatibleUpstream(
+                prefix: "opencode-go",
+                baseURL: "https://opencode.ai/zen/go/v1/messages",
+                apiKeys: openCodeGoApiKeys,
+                models: catalogModelsForPrefix("opencode-go").map { modelName in
                     if modelName.hasPrefix("opencode-go/") {
                         return String(modelName.dropFirst("opencode-go/".count))
                     }
                     return modelName
                 }
-            )
-        ]
-
-        let enabledClaudeCompatibleProviders = claudeCompatibleProviders.filter(\.enabled)
-        if !enabledClaudeCompatibleProviders.isEmpty {
-            additionalConfig += "\n\n# Claude-compatible upstreams (auto-added by CCProxy)\nclaude-api-key:\n"
-            for provider in enabledClaudeCompatibleProviders {
-                for key in provider.apiKeys {
-                    let escapedKey = key
-                        .replacingOccurrences(of: "\\", with: "\\\\")
-                        .replacingOccurrences(of: "\"", with: "\\\"")
-                        .replacingOccurrences(of: "\n", with: "\\n")
-                        .replacingOccurrences(of: "\t", with: "\\t")
-                    additionalConfig += "  # \(provider.comment)\n"
-                    additionalConfig += "  - api-key: \"\(escapedKey)\"\n"
-                    additionalConfig += "    prefix: \"\(provider.prefix)\"\n"
-                    additionalConfig += "    base-url: \"\(provider.baseURL)\"\n"
-                    additionalConfig += "    models:\n"
-                    for model in provider.models {
-                        additionalConfig += "      - name: \"\(model)\"\n"
-                    }
-                }
-            }
+            ))
         }
 
-        let mergedContent = baseContent + additionalConfig
-        let mergedConfigPath = authDir.appendingPathComponent("merged-config.yaml")
-        
         do {
-            try mergedContent.write(to: mergedConfigPath, atomically: true, encoding: .utf8)
-            // Set secure permissions (0600 - owner read/write only) since config contains API keys
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: mergedConfigPath.path)
-            return mergedConfigPath.path
+            return try ConfigComposer.writeMergedConfig(
+                bundledConfigPath: bundledConfigPath,
+                authDir: authDir,
+                userConfigPath: authDir.appendingPathComponent("config.yaml"),
+                upstreams: upstreams,
+                disabledOAuthProviders: disabledProviders,
+                managementSecretKey: managementSecretKey
+            )
         } catch {
-            NSLog("[ServerManager] Failed to write merged config: %@", error.localizedDescription)
+            NSLog("[ServerManager] Failed to compose merged config: %@", error.localizedDescription)
             return bundledConfigPath
         }
     }
@@ -714,8 +654,8 @@ oauth-excluded-models:
     // MARK: - Connected Providers
 
     /// Calculates the set of connected providers based on enabled state and valid credentials.
-    /// OAuth providers (claude, codex) require enabled state plus a non-disabled, non-expired auth file.
-    /// API-key hosted providers (zai, minimax, kimi, opencode-go) require enabled state plus
+    /// OAuth providers (claude, codex, kimi, xai) require enabled state plus a non-disabled, non-expired auth file.
+    /// API-key hosted providers (zai, minimax, opencode-go) require enabled state plus
     /// a non-disabled credential file with a non-empty api_key.
     /// Disabled providers and providers without valid credentials are excluded.
     /// - Parameter now: The current time for OAuth expiration checks (injectable for testing).
@@ -739,6 +679,7 @@ oauth-excluded-models:
             let isDisabled: Bool
             let isExpired: Bool
             let hasNonEmptyApiKey: Bool
+            let hasNonEmptyAccessToken: Bool
         }
 
         var credentialsByType: [ServiceType: [CredentialInfo]] = [:]
@@ -771,8 +712,15 @@ oauth-excluded-models:
 
             let apiKey = json["api_key"] as? String ?? ""
             let hasNonEmptyApiKey = !apiKey.isEmpty
+            let accessToken = json["access_token"] as? String ?? ""
+            let hasNonEmptyAccessToken = !accessToken.isEmpty
 
-            let info = CredentialInfo(isDisabled: isDisabled, isExpired: isExpired, hasNonEmptyApiKey: hasNonEmptyApiKey)
+            let info = CredentialInfo(
+                isDisabled: isDisabled,
+                isExpired: isExpired,
+                hasNonEmptyApiKey: hasNonEmptyApiKey,
+                hasNonEmptyAccessToken: hasNonEmptyAccessToken
+            )
             credentialsByType[serviceType, default: []].append(info)
         }
 
@@ -788,7 +736,13 @@ oauth-excluded-models:
 
             if oauthProviderRawValues.contains(serviceType.rawValue) {
                 // OAuth provider: needs at least one non-disabled, non-expired credential
-                if credentials.contains(where: { !$0.isDisabled && !$0.isExpired }) {
+                if credentials.contains(where: { credential in
+                    guard !credential.isDisabled && !credential.isExpired else { return false }
+                    if serviceType == .kimi || serviceType == .xai {
+                        return credential.hasNonEmptyAccessToken
+                    }
+                    return true
+                }) {
                     connected.insert(serviceType)
                 }
             } else {
@@ -837,4 +791,6 @@ oauth-excluded-models:
 enum AuthCommand: Equatable {
     case claudeLogin
     case codexLogin
+    case kimiLogin
+    case xaiLogin
 }

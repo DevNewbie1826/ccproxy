@@ -7,6 +7,7 @@ enum ServiceType: String, CaseIterable {
     case minimax
     case kimi
     case opencodeGo = "opencode-go"
+    case xai
 
     var displayName: String {
         switch self {
@@ -16,6 +17,7 @@ enum ServiceType: String, CaseIterable {
         case .minimax: return "MiniMax"
         case .kimi: return "Kimi"
         case .opencodeGo: return "OpenCode Go"
+        case .xai: return "xAI Grok"
         }
     }
 }
@@ -62,6 +64,11 @@ struct ServiceAccounts {
 
 class AuthManager: ObservableObject {
     @Published var serviceAccounts: [ServiceType: ServiceAccounts] = [:]
+    @Published private(set) var providersRequiringReLogin: Set<ServiceType> = []
+
+    var authDirectoryOverride: URL?
+
+    private var providersWithQuarantinedLegacyCredentials: Set<ServiceType> = []
     
     private static let dateFormatters: [ISO8601DateFormatter] = {
         let withFractional = ISO8601DateFormatter()
@@ -87,13 +94,17 @@ class AuthManager: ObservableObject {
     }
     
     func checkAuthStatus() {
-        let authDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
+        let authDir = authDirectoryOverride ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cli-proxy-api")
+        let quarantinedProviders = quarantineLegacyKimiCredentials(in: authDir)
+        providersWithQuarantinedLegacyCredentials.formUnion(quarantinedProviders)
         
         // Build new accounts dictionary
         var newAccounts: [ServiceType: [AuthAccount]] = [:]
         for type in ServiceType.allCases {
             newAccounts[type] = []
         }
+
+        var hasValidKimiOAuthAccount = false
         
         do {
             let files = try FileManager.default.contentsOfDirectory(at: authDir, includingPropertiesForKeys: nil)
@@ -136,8 +147,20 @@ class AuthManager: ObservableObject {
                 )
                 
                 newAccounts[serviceType]?.append(account)
+                if serviceType == .kimi,
+                   hasNonEmptyString(json["access_token"]),
+                   !account.isExpired,
+                   !account.isDisabled {
+                    hasValidKimiOAuthAccount = true
+                }
                 NSLog("[AuthStatus] Found %@ auth: %@", serviceType.displayName, account.displayName)
             }
+
+            if hasValidKimiOAuthAccount {
+                providersWithQuarantinedLegacyCredentials.remove(.kimi)
+            }
+
+            let reLoginProviders = providersWithQuarantinedLegacyCredentials
             
             // Update on main thread
             DispatchQueue.main.async {
@@ -147,14 +170,76 @@ class AuthManager: ObservableObject {
                         accounts: newAccounts[type] ?? []
                     )
                 }
+                self.providersRequiringReLogin = reLoginProviders
             }
         } catch {
             NSLog("[AuthStatus] Error checking auth status: %@", error.localizedDescription)
+            let reLoginProviders = providersWithQuarantinedLegacyCredentials
             DispatchQueue.main.async {
                 for type in ServiceType.allCases {
                     self.serviceAccounts[type] = ServiceAccounts(type: type)
                 }
+                self.providersRequiringReLogin = reLoginProviders
             }
+        }
+    }
+
+    private func quarantineLegacyKimiCredentials(in authDir: URL) -> Set<ServiceType> {
+        let files: [URL]
+        do {
+            files = try FileManager.default.contentsOfDirectory(at: authDir, includingPropertiesForKeys: nil)
+        } catch {
+            NSLog("[AuthStatus] Error scanning auth directory for legacy credentials: %@", error.localizedDescription)
+            return []
+        }
+
+        var quarantinedProviders: Set<ServiceType> = []
+        for file in files where file.pathExtension == "json" {
+            guard isLegacyKimiCredential(file) else { continue }
+
+            let destination = nextLegacyCredentialURL(for: file)
+            do {
+                try FileManager.default.moveItem(at: file, to: destination)
+                quarantinedProviders.insert(.kimi)
+                NSLog("[AuthStatus] Quarantined legacy Kimi auth file: %@ -> %@", file.lastPathComponent, destination.lastPathComponent)
+            } catch {
+                NSLog("[AuthStatus] Failed to quarantine legacy Kimi auth file %@: %@", file.path, error.localizedDescription)
+            }
+        }
+
+        return quarantinedProviders
+    }
+
+    private func isLegacyKimiCredential(_ file: URL) -> Bool {
+        guard let data = try? Data(contentsOf: file),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = json["type"] as? String,
+              type.lowercased() == ServiceType.kimi.rawValue,
+              hasNonEmptyString(json["api_key"]) else {
+            return false
+        }
+
+        return !hasNonEmptyString(json["access_token"])
+    }
+
+    private func hasNonEmptyString(_ value: Any?) -> Bool {
+        guard let string = value as? String else { return false }
+        return !string.isEmpty
+    }
+
+    private func nextLegacyCredentialURL(for file: URL) -> URL {
+        let firstCandidate = file.appendingPathExtension("legacy")
+        guard FileManager.default.fileExists(atPath: firstCandidate.path) else {
+            return firstCandidate
+        }
+
+        var suffix = 1
+        while true {
+            let candidate = file.appendingPathExtension("legacy.\(suffix)")
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            suffix += 1
         }
     }
     

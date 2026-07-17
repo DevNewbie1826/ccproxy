@@ -1,4 +1,15 @@
-port: 8317
-log: true
-secret-key: ""
+port: 8328
+host: 127.0.0.1
+remote-management:
+  allow-remote: false
+  secret-key: ""
+auth-dir: "~/.cli-proxy-api"
+debug: false
+logging-to-file: false
 force-model-prefix: true
+usage-statistics-enabled: true
+proxy-url: ""
+request-retry: 3
+quota-exceeded:
+  switch-project: true
+  switch-preview-model: true

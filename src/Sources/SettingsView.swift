@@ -11,6 +11,7 @@ enum ProviderIconNames {
         case .minimax: return "icon-minimax.png"
         case .kimi: return "icon-kimi.png"
         case .opencodeGo: return "icon-opencode-go.png"
+        case .xai: return "icon-xai.png"
         }
     }
 }
@@ -130,6 +131,7 @@ struct ServiceRow<ExtraContent: View>: View {
     let accounts: [AuthAccount]
     let isAuthenticating: Bool
     let helpText: String?
+    let reLoginRequired: Bool
     let isEnabled: Bool
     let isTemplateIcon: Bool
     let customTitle: String?
@@ -232,9 +234,9 @@ struct ServiceRow<ExtraContent: View>: View {
                         .padding(.top, 4)
                     }
                 } else {
-                    Text("No connected accounts")
+                    Text(reLoginRequired ? "Re-login required" : "No connected accounts")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(reLoginRequired ? .orange : .secondary)
                         .padding(.leading, 28)
                 }
             }
@@ -285,8 +287,6 @@ struct SettingsView: View {
     @State private var zaiApiKey = ""
     @State private var showingMiniMaxApiKeyPrompt = false
     @State private var miniMaxApiKey = ""
-    @State private var showingKimiApiKeyPrompt = false
-    @State private var kimiApiKey = ""
     @State private var showingOpenCodeGoApiKeyPrompt = false
     @State private var openCodeGoApiKey = ""
     @State private var pendingRefresh: DispatchWorkItem?
@@ -372,6 +372,7 @@ struct SettingsView: View {
                         accounts: authManager.accounts(for: .claude),
                         isAuthenticating: authenticatingService == .claude,
                         helpText: nil,
+                        reLoginRequired: false,
                         isEnabled: serverManager.isProviderEnabled("claude"),
                         isTemplateIcon: true,
                         customTitle: serverManager.vercelGatewayEnabled && !serverManager.vercelApiKey.isEmpty ? "Claude Code (via Vercel)" : nil,
@@ -390,6 +391,7 @@ struct SettingsView: View {
                         accounts: authManager.accounts(for: .codex),
                         isAuthenticating: authenticatingService == .codex,
                         helpText: nil,
+                        reLoginRequired: false,
                         isEnabled: serverManager.isProviderEnabled("codex"),
                         isTemplateIcon: true,
                         customTitle: nil,
@@ -401,11 +403,29 @@ struct SettingsView: View {
                     ) { EmptyView() }
 
                     ServiceRow(
+                        serviceType: .xai,
+                        iconName: ProviderIconNames.iconName(for: .xai),
+                        accounts: authManager.accounts(for: .xai),
+                        isAuthenticating: authenticatingService == .xai,
+                        helpText: "xAI Grok provides access to Grok models via OAuth.",
+                        reLoginRequired: false,
+                        isEnabled: serverManager.isProviderEnabled("xai"),
+                        isTemplateIcon: true,
+                        customTitle: nil,
+                        onConnect: { connectService(.xai) },
+                        onDisconnect: { account in disconnectAccount(account) },
+                        onToggleDisabled: { account in toggleAccountDisabled(account) },
+                        onToggleEnabled: { enabled in serverManager.setProviderEnabled("xai", enabled: enabled) },
+                        onExpandChange: { expanded in expandedRowCount += expanded ? 1 : -1 }
+                    ) { EmptyView() }
+
+                    ServiceRow(
                         serviceType: .zai,
                         iconName: ProviderIconNames.iconName(for: .zai),
                         accounts: authManager.accounts(for: .zai),
                         isAuthenticating: authenticatingService == .zai,
                         helpText: "Z.AI GLM provides access to GLM-4.7 and other models via API key. Get your key at https://z.ai/manage-apikey/apikey-list",
+                        reLoginRequired: false,
                         isEnabled: serverManager.isProviderEnabled("zai"),
                         isTemplateIcon: true,
                         customTitle: nil,
@@ -422,6 +442,7 @@ struct SettingsView: View {
                         accounts: authManager.accounts(for: .minimax),
                         isAuthenticating: authenticatingService == .minimax,
                         helpText: "MiniMax provides access to Claude-compatible models via API key. Get your key at https://platform.minimaxi.com",
+                        reLoginRequired: false,
                         isEnabled: serverManager.isProviderEnabled("minimax"),
                         isTemplateIcon: false,
                         customTitle: nil,
@@ -437,11 +458,12 @@ struct SettingsView: View {
                         iconName: ProviderIconNames.iconName(for: .kimi),
                         accounts: authManager.accounts(for: .kimi),
                         isAuthenticating: authenticatingService == .kimi,
-                        helpText: "Kimi provides access to Moonshot AI models via API key.",
+                        helpText: "Kimi provides access to Moonshot AI models via OAuth.",
+                        reLoginRequired: authManager.providersRequiringReLogin.contains(.kimi),
                         isEnabled: serverManager.isProviderEnabled("kimi"),
                         isTemplateIcon: false,
                         customTitle: nil,
-                        onConnect: { showingKimiApiKeyPrompt = true },
+                        onConnect: { connectService(.kimi) },
                         onDisconnect: { account in disconnectAccount(account) },
                         onToggleDisabled: { account in toggleAccountDisabled(account) },
                         onToggleEnabled: { enabled in serverManager.setProviderEnabled("kimi", enabled: enabled) },
@@ -454,6 +476,7 @@ struct SettingsView: View {
                         accounts: authManager.accounts(for: .opencodeGo),
                         isAuthenticating: authenticatingService == .opencodeGo,
                         helpText: "OpenCode Go provides low-cost coding models via subscription. Get your key at https://opencode.ai/ko/go",
+                        reLoginRequired: false,
                         isEnabled: serverManager.isProviderEnabled("opencode-go"),
                         isTemplateIcon: false,
                         customTitle: nil,
@@ -525,32 +548,6 @@ struct SettingsView: View {
                         startMiniMaxAuth(apiKey: miniMaxApiKey)
                     }
                     .disabled(miniMaxApiKey.isEmpty)
-                    .keyboardShortcut(.defaultAction)
-                }
-            }
-            .padding(24)
-            .frame(width: 400)
-        }
-        .sheet(isPresented: $showingKimiApiKeyPrompt) {
-            VStack(spacing: 16) {
-                Text("Kimi API Key")
-                    .font(.headline)
-                Text("Enter your Kimi API key from platform.moonshot.ai or platform.kimi.ai")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                SecureField("", text: $kimiApiKey)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 300)
-                HStack(spacing: 12) {
-                    Button("Cancel") {
-                        showingKimiApiKeyPrompt = false
-                        kimiApiKey = ""
-                    }
-                    Button("Add Key") {
-                        showingKimiApiKeyPrompt = false
-                        startKimiAuth(apiKey: kimiApiKey)
-                    }
-                    .disabled(kimiApiKey.isEmpty)
                     .keyboardShortcut(.defaultAction)
                 }
             }
@@ -648,13 +645,12 @@ struct SettingsView: View {
         switch serviceType {
         case .claude: command = .claudeLogin
         case .codex: command = .codexLogin
+        case .kimi: command = .kimiLogin
+        case .xai: command = .xaiLogin
         case .zai:
             authenticatingService = nil
             return // handled separately with API key prompt
         case .minimax:
-            authenticatingService = nil
-            return // handled separately with API key prompt
-        case .kimi:
             authenticatingService = nil
             return // handled separately with API key prompt
         case .opencodeGo:
@@ -686,12 +682,14 @@ struct SettingsView: View {
             return "🌐 Browser opened for Claude Code authentication.\n\nPlease complete the login in your browser.\n\nThe app will automatically detect your credentials."
         case .codex:
             return "🌐 Browser opened for Codex authentication.\n\nPlease complete the login in your browser.\n\nThe app will automatically detect your credentials."
+        case .kimi:
+            return "🌐 Browser opened for Kimi authentication.\n\nPlease complete the login in your browser.\n\nThe app will automatically detect your credentials."
+        case .xai:
+            return "🌐 Browser opened for xAI Grok authentication.\n\nPlease complete the login in your browser.\n\nThe app will automatically detect your credentials."
         case .zai:
             return "✓ Z.AI API key added successfully.\n\nYou can now use GLM models through the proxy."
         case .minimax:
             return "✓ MiniMax API key added successfully.\n\nYou can now use MiniMax models through the proxy."
-        case .kimi:
-            return "✓ Kimi API key added successfully.\n\nYou can now use Kimi models through the proxy."
         case .opencodeGo:
             return "✓ OpenCode Go API key added successfully.\n\nYou can now use OpenCode Go models through the proxy."
         }
@@ -734,30 +732,6 @@ struct SettingsView: View {
                 if success {
                     self.authResultSuccess = true
                     self.authResultMessage = self.successMessage(for: .minimax)
-                    self.showingAuthResult = true
-                    self.authManager.checkAuthStatus()
-                } else {
-                    self.authResultSuccess = false
-                    self.authResultMessage = "Failed to save API key.\n\nDetails: \(output.isEmpty ? "Unknown error" : output)"
-                    self.showingAuthResult = true
-                }
-            }
-        }
-    }
-
-    private func startKimiAuth(apiKey: String) {
-        authenticatingService = .kimi
-        NSLog("[SettingsView] Adding Kimi API key")
-
-        serverManager.saveKimiApiKey(apiKey) { success, output in
-            NSLog("[SettingsView] Kimi key save completed - success: %d, output: %@", success, output)
-            DispatchQueue.main.async {
-                self.authenticatingService = nil
-                self.kimiApiKey = ""
-
-                if success {
-                    self.authResultSuccess = true
-                    self.authResultMessage = self.successMessage(for: .kimi)
                     self.showingAuthResult = true
                     self.authManager.checkAuthStatus()
                 } else {

@@ -1,4 +1,5 @@
 import XCTest
+import Yams
 @testable import CCProxy
 
 final class ServerManagerConfigTests: XCTestCase {
@@ -39,30 +40,33 @@ final class ServerManagerConfigTests: XCTestCase {
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let document = parseConfig(contents)
+            let remoteManagement = document["remote-management"] as? [String: Any]
 
-            XCTAssertTrue(contents.contains("secret-key: \"test-secret\""))
+            XCTAssertEqual(remoteManagement?["secret-key"] as? String, "test-secret")
         }
     }
 
-    func testMergedConfigAddsClaudeCompatibleUpstreamsForSupportedProviders() {
+    func testMergedConfigAddsClaudeCompatibleUpstreamsForGeneratedAPIKeyProviders() {
         withTemporaryAuthDirectory { authDir in
             writeCredential(provider: "zai", apiKey: "zai-test-key", authDir: authDir)
             writeCredential(provider: "kimi", apiKey: "kimi-test-key", authDir: authDir)
             writeCredential(provider: "minimax", apiKey: "minimax-test-key", authDir: authDir)
+            writeCredential(provider: "opencode-go", apiKey: "opencode-test-key", authDir: authDir)
 
             let manager = makeManager(authDir: authDir)
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let entries = claudeAPIKeyEntries(from: contents)
 
-            XCTAssertTrue(contents.contains("claude-api-key:"))
-            XCTAssertTrue(contents.contains("api-key: \"zai-test-key\""))
-            XCTAssertTrue(contents.contains("api-key: \"kimi-test-key\""))
-            XCTAssertTrue(contents.contains("api-key: \"minimax-test-key\""))
-            XCTAssertTrue(contents.contains("prefix: \"zai\"\n    base-url: \"https://api.z.ai/api/anthropic\""))
-            XCTAssertTrue(contents.contains("prefix: \"kimi\"\n    base-url: \"https://api.kimi.com/coding/\""))
-            XCTAssertTrue(contents.contains("prefix: \"minimax\"\n    base-url: \"https://api.minimax.io/anthropic\""))
-            XCTAssertFalse(contents.contains("alias:"))
+            XCTAssertEqual(entries.map { $0["api-key"] as? String }, ["zai-test-key", "minimax-test-key", "opencode-test-key"])
+            XCTAssertEqual(entries.map { $0["prefix"] as? String }, ["zai", "minimax", "opencode-go"])
+            XCTAssertEqual(entry(withPrefix: "zai", in: entries)?["base-url"] as? String, "https://api.z.ai/api/anthropic")
+            XCTAssertEqual(entry(withPrefix: "minimax", in: entries)?["base-url"] as? String, "https://api.minimax.io/anthropic")
+            XCTAssertEqual(entry(withPrefix: "opencode-go", in: entries)?["base-url"] as? String, "https://opencode.ai/zen/go/v1/messages")
+            XCTAssertNil(entry(withPrefix: "kimi", in: entries), "Kimi credentials should not generate claude-api-key entries in T2")
+            XCTAssertTrue(entries.allSatisfy { $0["alias"] == nil })
         }
     }
 
@@ -92,17 +96,10 @@ final class ServerManagerConfigTests: XCTestCase {
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let document = parseConfig(contents)
 
-            let lines = contents.components(separatedBy: "\n")
-            let topLevelForceModelPrefix = lines.filter { line in
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed == "force-model-prefix: true"
-                    && !line.hasPrefix(" ")
-                    && !line.hasPrefix("\t")
-            }
-
-            XCTAssertEqual(topLevelForceModelPrefix.count, 1,
-                           "Generated config must contain exactly one top-level force-model-prefix: true line, found \(topLevelForceModelPrefix.count)")
+            XCTAssertEqual(document["force-model-prefix"] as? Bool, true,
+                           "Generated config must preserve top-level force-model-prefix: true")
         }
     }
 
@@ -113,17 +110,22 @@ final class ServerManagerConfigTests: XCTestCase {
             let manager = makeManager(authDir: authDir)
             manager.enabledProviders["claude"] = false
             manager.enabledProviders["codex"] = false
+            manager.enabledProviders["kimi"] = false
+            manager.enabledProviders["xai"] = false
 
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let exclusions = oauthExcludedModels(from: contents)
 
-            XCTAssertTrue(contents.contains("oauth-excluded-models:"),
-                          "Config should contain oauth-excluded-models section")
-            XCTAssertTrue(contents.contains("  claude:\n    - \"*\""),
-                          "Disabled 'claude' provider should have wildcard exclusion")
-            XCTAssertTrue(contents.contains("  codex:\n    - \"*\""),
-                          "Disabled 'codex' provider should have wildcard exclusion")
+            XCTAssertEqual(exclusions["claude"] as? [String], ["*"],
+                           "Disabled 'claude' provider should have wildcard exclusion")
+            XCTAssertEqual(exclusions["codex"] as? [String], ["*"],
+                           "Disabled 'codex' provider should have wildcard exclusion")
+            XCTAssertEqual(exclusions["kimi"] as? [String], ["*"],
+                           "Disabled 'kimi' provider should have wildcard exclusion")
+            XCTAssertEqual(exclusions["xai"] as? [String], ["*"],
+                           "Disabled 'xai' provider should have wildcard exclusion")
 
             // Verify removed provider OAuth keys are absent
             let removedNeedles = [
@@ -139,9 +141,14 @@ final class ServerManagerConfigTests: XCTestCase {
         }
     }
 
-    /// Verifies oauthProviderKeys contains only Claude and Codex.
-    func testOAuthProviderKeysOnlyContainClaudeAndCodex() {
-        XCTAssertEqual(ServerManager.oauthProviderKeys, ["claude": "claude", "codex": "codex"])
+    /// Verifies oauthProviderKeys contains the provider keys supported by OAuth config exclusions.
+    func testOAuthProviderKeysContainSupportedOAuthProviders() {
+        XCTAssertEqual(ServerManager.oauthProviderKeys, [
+            "claude": "claude",
+            "codex": "codex",
+            "kimi": "kimi",
+            "xai": "xai"
+        ])
     }
 
     /// Verifies the bundled config.yaml does not contain retired entries.
@@ -240,8 +247,9 @@ final class ServerManagerConfigTests: XCTestCase {
                     let configPath = manager.getConfigPath()
 
                     guard let contents = readConfig(at: configPath) else { return }
+                    let apiKeys = claudeAPIKeyEntries(from: contents).compactMap { $0["api-key"] as? String }
 
-                    XCTAssertTrue(extractAllApiKeyValues(from: contents).contains(testCase.apiKey),
+                    XCTAssertTrue(apiKeys.contains(testCase.apiKey),
                                   "Generated api-key scalar should round-trip exactly for \(testCase.name)")
                 }
             }
@@ -282,6 +290,121 @@ final class ServerManagerConfigTests: XCTestCase {
 
             XCTAssertTrue(connected.contains(.codex),
                           "codex should be connected with valid OAuth")
+        }
+    }
+
+    func testConnectedProviderIncludesKimiWithValidOAuthAccessToken() {
+        withTemporaryAuthDirectory { authDir in
+            writeOAuthCredential(provider: "kimi", authDir: authDir,
+                                 accessToken: "kimi-access-token",
+                                 expired: "2099-12-31T23:59:59Z")
+
+            let manager = makeManager(authDir: authDir)
+            let connected = manager.connectedProviders(now: fixedNow)
+
+            XCTAssertTrue(connected.contains(.kimi),
+                          "kimi should be connected with valid OAuth access_token")
+        }
+    }
+
+    func testConnectedProviderExcludesLegacyKimiWithoutAccessToken() {
+        withTemporaryAuthDirectory { authDir in
+            writeCredential(provider: "kimi", apiKey: "legacy-kimi-key", authDir: authDir)
+
+            let manager = makeManager(authDir: authDir)
+            let connected = manager.connectedProviders(now: fixedNow)
+
+            XCTAssertFalse(connected.contains(.kimi),
+                           "legacy kimi API-key shape must not count as connected OAuth")
+        }
+    }
+
+    func testConnectedProviderExcludesExpiredKimiOAuth() {
+        withTemporaryAuthDirectory { authDir in
+            writeOAuthCredential(provider: "kimi", authDir: authDir,
+                                 accessToken: "kimi-access-token",
+                                 expired: "2020-01-01T00:00:00Z")
+
+            let manager = makeManager(authDir: authDir)
+            let connected = manager.connectedProviders(now: fixedNow)
+
+            XCTAssertFalse(connected.contains(.kimi),
+                           "expired kimi OAuth credential should not be connected")
+        }
+    }
+
+    func testConnectedProviderExcludesDisabledKimiOAuthAndGeneratesExclusion() {
+        withTemporaryAuthDirectory { authDir in
+            writeOAuthCredential(provider: "kimi", authDir: authDir,
+                                 accessToken: "kimi-access-token",
+                                 expired: "2099-12-31T23:59:59Z")
+
+            let manager = makeManager(authDir: authDir)
+            manager.enabledProviders["kimi"] = false
+
+            let connected = manager.connectedProviders(now: fixedNow)
+            XCTAssertFalse(connected.contains(.kimi),
+                           "disabled kimi provider should not be connected")
+
+            let configPath = manager.getConfigPath()
+            guard let contents = readConfig(at: configPath) else { return }
+            let exclusions = oauthExcludedModels(from: contents)
+            XCTAssertEqual(exclusions["kimi"] as? [String], ["*"],
+                           "disabled kimi should be excluded from OAuth models")
+        }
+    }
+
+    func testConnectedProviderIncludesXAIWithValidOAuthAccessToken() {
+        withTemporaryAuthDirectory { authDir in
+            writeOAuthCredential(provider: "xai", authDir: authDir,
+                                 accessToken: "xai-access-token",
+                                 expired: "2099-12-31T23:59:59Z")
+
+            let manager = makeManager(authDir: authDir)
+            let connected = manager.connectedProviders(now: fixedNow)
+
+            XCTAssertTrue(connected.contains(.xai),
+                          "xai should be connected with valid OAuth access_token")
+        }
+    }
+
+    func testConnectedProviderExcludesDisabledXAIOAuthAndGeneratesExclusion() {
+        withTemporaryAuthDirectory { authDir in
+            writeOAuthCredential(provider: "xai", authDir: authDir,
+                                 accessToken: "xai-access-token",
+                                 expired: "2099-12-31T23:59:59Z")
+
+            let manager = makeManager(authDir: authDir)
+            manager.enabledProviders["xai"] = false
+
+            let connected = manager.connectedProviders(now: fixedNow)
+            XCTAssertFalse(connected.contains(.xai),
+                           "disabled xai provider should not be connected")
+
+            let configPath = manager.getConfigPath()
+            guard let contents = readConfig(at: configPath) else { return }
+            let exclusions = oauthExcludedModels(from: contents)
+            XCTAssertEqual(exclusions["xai"] as? [String], ["*"],
+                           "disabled xai should be excluded from OAuth models")
+        }
+    }
+
+    func testSaveKimiApiKeyDoesNotWriteCredentialFile() {
+        withTemporaryAuthDirectory { authDir in
+            let manager = makeManager(authDir: authDir)
+            let expectation = expectation(description: "Kimi save rejected")
+
+            manager.saveKimiApiKey("kimi-api-key") { success, _ in
+                XCTAssertFalse(success, "Kimi API-key saving should be unavailable after OAuth migration")
+                expectation.fulfill()
+            }
+
+            waitForExpectations(timeout: 2.0)
+
+            let files = (try? FileManager.default.contentsOfDirectory(at: authDir, includingPropertiesForKeys: nil)) ?? []
+            let kimiAuthFiles = files.filter { $0.pathExtension == "json" && $0.lastPathComponent.hasPrefix("kimi-") }
+            XCTAssertTrue(kimiAuthFiles.isEmpty,
+                          "Rejected Kimi API-key save must not create kimi auth files")
         }
     }
 
@@ -363,14 +486,13 @@ final class ServerManagerConfigTests: XCTestCase {
         }
     }
 
-    /// With enabled zai, minimax, kimi, or opencode-go and at least one matching
+    /// With enabled zai, minimax, or opencode-go and at least one matching
     /// non-disabled API-key credential file/account with a non-empty key,
     /// the connected-provider set contains that provider.
     func testConnectedProviderIncludesAPIKeyProviderWithValidKey() {
         let providers: [(String, ServiceType)] = [
             ("zai", .zai),
             ("minimax", .minimax),
-            ("kimi", .kimi),
             ("opencode-go", .opencodeGo)
         ]
 
@@ -390,13 +512,12 @@ final class ServerManagerConfigTests: XCTestCase {
         }
     }
 
-    /// With enabled zai, minimax, kimi, or opencode-go but no matching API-key
+    /// With enabled zai, minimax, or opencode-go but no matching API-key
     /// credential, the connected-provider set excludes that provider.
     func testConnectedProviderExcludesAPIKeyProviderWithNoMatchingKey() {
         let providers: [(String, ServiceType)] = [
             ("zai", .zai),
             ("minimax", .minimax),
-            ("kimi", .kimi),
             ("opencode-go", .opencodeGo)
         ]
 
@@ -421,7 +542,6 @@ final class ServerManagerConfigTests: XCTestCase {
         let providers: [(String, ServiceType)] = [
             ("zai", .zai),
             ("minimax", .minimax),
-            ("kimi", .kimi),
             ("opencode-go", .opencodeGo)
         ]
 
@@ -447,7 +567,6 @@ final class ServerManagerConfigTests: XCTestCase {
         let providers: [(String, ServiceType)] = [
             ("zai", .zai),
             ("minimax", .minimax),
-            ("kimi", .kimi),
             ("opencode-go", .opencodeGo)
         ]
 
@@ -468,7 +587,7 @@ final class ServerManagerConfigTests: XCTestCase {
     }
 
     /// With any disabled provider including claude, codex, zai, minimax, kimi,
-    /// or opencode-go, the connected-provider set excludes that provider even
+    /// xai, or opencode-go, the connected-provider set excludes that provider even
     /// when valid auth or API-key credentials exist.
     func testConnectedProviderExcludesDisabledProviderEvenWithValidCredentials() {
         withTemporaryAuthDirectory { authDir in
@@ -477,9 +596,14 @@ final class ServerManagerConfigTests: XCTestCase {
                                  expired: "2099-12-31T23:59:59Z")
             writeOAuthCredential(provider: "codex", authDir: authDir,
                                  expired: "2099-12-31T23:59:59Z")
+            writeOAuthCredential(provider: "kimi", authDir: authDir,
+                                 accessToken: "kimi-access-token",
+                                 expired: "2099-12-31T23:59:59Z")
+            writeOAuthCredential(provider: "xai", authDir: authDir,
+                                 accessToken: "xai-access-token",
+                                 expired: "2099-12-31T23:59:59Z")
             writeCredential(provider: "zai", apiKey: "zai-key", authDir: authDir)
             writeCredential(provider: "minimax", apiKey: "minimax-key", authDir: authDir)
-            writeCredential(provider: "kimi", apiKey: "kimi-key", authDir: authDir)
             writeCredential(provider: "opencode-go", apiKey: "ocg-key", authDir: authDir)
 
             let manager = makeManager(authDir: authDir)
@@ -522,13 +646,15 @@ final class ServerManagerConfigTests: XCTestCase {
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let entries = claudeAPIKeyEntries(from: contents)
+            let opencodeGoEntry = entry(withPrefix: "opencode-go", in: entries)
 
-            XCTAssertTrue(contents.contains("api-key: \"opencode-test-key\""),
-                          "Config should contain the OpenCode Go API key")
-            XCTAssertTrue(contents.contains("prefix: \"opencode-go\""),
-                          "Config should contain opencode-go prefix")
-            XCTAssertTrue(contents.contains("base-url: \"https://opencode.ai/zen/go/v1/messages\""),
-                          "Config should contain the messages endpoint as base-url")
+            XCTAssertEqual(opencodeGoEntry?["api-key"] as? String, "opencode-test-key",
+                           "Config should contain the OpenCode Go API key")
+            XCTAssertEqual(opencodeGoEntry?["prefix"] as? String, "opencode-go",
+                           "Config should contain opencode-go prefix")
+            XCTAssertEqual(opencodeGoEntry?["base-url"] as? String, "https://opencode.ai/zen/go/v1/messages",
+                           "Config should contain the messages endpoint as base-url")
         }
     }
 
@@ -548,19 +674,17 @@ final class ServerManagerConfigTests: XCTestCase {
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let entries = claudeAPIKeyEntries(from: contents)
+            let modelNames = modelNames(in: entry(withPrefix: "opencode-go", in: entries))
 
-            // Config must contain unprefixed model slugs
-            XCTAssertTrue(contents.contains("- name: \"kimi-k2.6\""),
+            XCTAssertTrue(modelNames.contains("kimi-k2.6"),
                           "Config should contain unprefixed slug kimi-k2.6")
-            XCTAssertTrue(contents.contains("- name: \"claude-sonnet-4\""),
+            XCTAssertTrue(modelNames.contains("claude-sonnet-4"),
                           "Config should contain unprefixed slug claude-sonnet-4")
 
-            // Config must NOT double-prefix
-            XCTAssertFalse(contents.contains("opencode-go/opencode-go/"),
+            XCTAssertFalse(modelNames.contains("opencode-go/kimi-k2.6"),
                            "Config must not contain double-prefixed model names")
-            XCTAssertFalse(contents.contains("- name: \"opencode-go/kimi-k2.6\""),
-                           "Config must not contain prefixed model name in opencode-go block")
-            XCTAssertFalse(contents.contains("- name: \"opencode-go/claude-sonnet-4\""),
+            XCTAssertFalse(modelNames.contains("opencode-go/claude-sonnet-4"),
                            "Config must not contain prefixed model name in opencode-go block")
         }
     }
@@ -604,15 +728,15 @@ final class ServerManagerConfigTests: XCTestCase {
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let entries = claudeAPIKeyEntries(from: contents)
+            let modelNames = modelNames(in: entry(withPrefix: "zai", in: entries))
 
-            // Config must contain the catalog-derived model names
-            XCTAssertTrue(contents.contains("- name: \"catalog-glm-5.1\""),
+            XCTAssertTrue(modelNames.contains("catalog-glm-5.1"),
                            "Config should contain catalog-derived ZAI model name")
-            XCTAssertTrue(contents.contains("- name: \"catalog-glm-5\""),
+            XCTAssertTrue(modelNames.contains("catalog-glm-5"),
                            "Config should contain catalog-derived ZAI model name")
 
-            // Must NOT contain static fallback names
-            XCTAssertFalse(contents.contains("- name: \"glm-5-turbo\""),
+            XCTAssertFalse(modelNames.contains("glm-5-turbo"),
                            "Config must not contain static fallback model name")
         }
     }
@@ -630,18 +754,18 @@ final class ServerManagerConfigTests: XCTestCase {
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let entries = claudeAPIKeyEntries(from: contents)
+            let modelNames = modelNames(in: entry(withPrefix: "minimax", in: entries))
 
-            XCTAssertTrue(contents.contains("- name: \"catalog-MiniMax-M3\""),
+            XCTAssertTrue(modelNames.contains("catalog-MiniMax-M3"),
                            "Config should contain catalog-derived MiniMax model name")
 
-            // Must NOT contain static fallback name
-            XCTAssertFalse(contents.contains("- name: \"MiniMax-M2.7\""),
+            XCTAssertFalse(modelNames.contains("MiniMax-M2.7"),
                            "Config must not contain static fallback MiniMax model name")
         }
     }
 
-    /// Kimi config model names come from injected catalog data, not static Swift arrays.
-    func testKimiConfigModelNamesComeFromCatalog() {
+    func testKimiCredentialDoesNotGenerateClaudeAPIKeyConfig() {
         withTemporaryAuthDirectory { authDir in
             writeCredential(provider: "kimi", apiKey: "kimi-test-key", authDir: authDir)
 
@@ -653,13 +777,12 @@ final class ServerManagerConfigTests: XCTestCase {
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let entries = claudeAPIKeyEntries(from: contents)
 
-            XCTAssertTrue(contents.contains("- name: \"catalog-kimi-k3\""),
-                           "Config should contain catalog-derived Kimi model name")
-
-            // Must NOT contain static fallback name
-            XCTAssertFalse(contents.contains("- name: \"kimi-k2-turbo-preview\""),
-                           "Config must not contain static fallback Kimi model name")
+            XCTAssertNil(entry(withPrefix: "kimi", in: entries),
+                         "Kimi credentials should not generate claude-api-key config entries")
+            XCTAssertFalse(entries.compactMap { $0["api-key"] as? String }.contains("kimi-test-key"),
+                           "Generated config must not contain the Kimi API key")
         }
     }
 
@@ -682,6 +805,9 @@ final class ServerManagerConfigTests: XCTestCase {
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let entries = claudeAPIKeyEntries(from: contents)
+            let zaiModelNames = modelNames(in: entry(withPrefix: "zai", in: entries))
+            let minimaxModelNames = modelNames(in: entry(withPrefix: "minimax", in: entries))
 
             // The bundled snapshot contains ZAI models beyond the old static list.
             // Verify that models NOT in the old static list appear in config,
@@ -693,18 +819,12 @@ final class ServerManagerConfigTests: XCTestCase {
 
             // The config must have model names from the bundled snapshot for each provider.
             // Verify that the ZAI block contains at least the basic model "glm-5.1"
-            XCTAssertTrue(contents.contains("- name: \"glm-5.1\""),
+            XCTAssertTrue(zaiModelNames.contains("glm-5.1"),
                            "Config should contain catalog-derived ZAI model name glm-5.1")
-
-            // Verify Kimi has catalog models (bundled snapshot has multiple kimi models)
-            // Old static list only had "kimi-k2-turbo-preview"; catalog has more.
-            // Verify that kimi-k2.6 (a catalog-specific model) appears.
-            XCTAssertTrue(contents.contains("- name: \"kimi-k2.6\""),
-                           "Config should contain catalog-derived Kimi model name kimi-k2.6")
 
             // Verify the old static MiniMax list only had "MiniMax-M2.7".
             // The catalog should still provide it (or more).
-            XCTAssertTrue(contents.contains("- name: \"MiniMax-M2.7\""),
+            XCTAssertTrue(minimaxModelNames.contains("MiniMax-M2.7"),
                            "Config should contain catalog-derived MiniMax model name")
         }
     }
@@ -756,8 +876,10 @@ final class ServerManagerConfigTests: XCTestCase {
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let entries = claudeAPIKeyEntries(from: contents)
+            let modelNames = modelNames(in: entry(withPrefix: "zai", in: entries))
 
-            XCTAssertTrue(contents.contains("- name: \"runtime-exclusive-model\""),
+            XCTAssertTrue(modelNames.contains("runtime-exclusive-model"),
                            "Config should use model names from runtime cache file")
         }
     }
@@ -779,7 +901,9 @@ final class ServerManagerConfigTests: XCTestCase {
             // First config generation — should use initial cache
             let configPath1 = manager.getConfigPath()
             guard let contents1 = readConfig(at: configPath1) else { return }
-            XCTAssertTrue(contents1.contains("- name: \"cache-v1-model\""),
+            let entries1 = claudeAPIKeyEntries(from: contents1)
+            let modelNames1 = modelNames(in: entry(withPrefix: "zai", in: entries1))
+            XCTAssertTrue(modelNames1.contains("cache-v1-model"),
                           "First config should contain cache-v1-model")
 
             // Update the runtime cache file with a different model
@@ -790,9 +914,11 @@ final class ServerManagerConfigTests: XCTestCase {
             // Second config generation — should reflect the updated cache
             let configPath2 = manager.getConfigPath()
             guard let contents2 = readConfig(at: configPath2) else { return }
-            XCTAssertTrue(contents2.contains("- name: \"cache-v2-model\""),
+            let entries2 = claudeAPIKeyEntries(from: contents2)
+            let modelNames2 = modelNames(in: entry(withPrefix: "zai", in: entries2))
+            XCTAssertTrue(modelNames2.contains("cache-v2-model"),
                           "Second config should reflect updated cache model")
-            XCTAssertFalse(contents2.contains("- name: \"cache-v1-model\""),
+            XCTAssertFalse(modelNames2.contains("cache-v1-model"),
                            "Second config should not contain stale v1 model")
         }
     }
@@ -812,9 +938,11 @@ final class ServerManagerConfigTests: XCTestCase {
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let entries = claudeAPIKeyEntries(from: contents)
+            let modelNames = modelNames(in: entry(withPrefix: "zai", in: entries))
 
             // Should fall back to bundled snapshot — which contains glm-5.1
-            XCTAssertTrue(contents.contains("- name: \"glm-5.1\""),
+            XCTAssertTrue(modelNames.contains("glm-5.1"),
                            "Config should fall back to bundled snapshot when runtime cache is invalid")
         }
     }
@@ -841,10 +969,11 @@ final class ServerManagerConfigTests: XCTestCase {
                     let configPath = manager.getConfigPath()
 
                     guard let contents = readConfig(at: configPath) else { return }
+                    let entries = claudeAPIKeyEntries(from: contents)
 
-                    XCTAssertFalse(contents.contains("api-key: \"\(key)\""),
+                    XCTAssertFalse(entries.compactMap { $0["api-key"] as? String }.contains(key),
                                    "\(provider) config must not contain disabled credential key")
-                    XCTAssertFalse(contents.contains("prefix: \"\(provider)\""),
+                    XCTAssertNil(entry(withPrefix: provider, in: entries),
                                    "\(provider) config must not emit block for disabled credential")
                 }
             }
@@ -865,8 +994,9 @@ final class ServerManagerConfigTests: XCTestCase {
                     let configPath = manager.getConfigPath()
 
                     guard let contents = readConfig(at: configPath) else { return }
+                    let entries = claudeAPIKeyEntries(from: contents)
 
-                    XCTAssertFalse(contents.contains("prefix: \"\(provider)\""),
+                    XCTAssertNil(entry(withPrefix: provider, in: entries),
                                    "\(provider) config must not emit block for empty API key")
                 }
             }
@@ -894,10 +1024,11 @@ final class ServerManagerConfigTests: XCTestCase {
                     let configPath = manager.getConfigPath()
 
                     guard let contents = readConfig(at: configPath) else { return }
+                    let entries = claudeAPIKeyEntries(from: contents)
 
-                    XCTAssertFalse(contents.contains("api-key: \"\(key)\""),
+                    XCTAssertFalse(entries.compactMap { $0["api-key"] as? String }.contains(key),
                                    "\(provider) config must not contain key when provider disabled")
-                    XCTAssertFalse(contents.contains("prefix: \"\(provider)\""),
+                    XCTAssertNil(entry(withPrefix: provider, in: entries),
                                    "\(provider) config must not emit block when provider disabled")
                 }
             }
@@ -917,13 +1048,12 @@ final class ServerManagerConfigTests: XCTestCase {
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let entries = claudeAPIKeyEntries(from: contents)
 
             // The key should NOT appear under the zai prefix (wrong provider)
             // but MAY appear under the minimax prefix (correct JSON type)
-            XCTAssertFalse(contents.contains("prefix: \"zai\""),
+            XCTAssertNil(entry(withPrefix: "zai", in: entries),
                            "Config must not emit zai block for mismatched type file")
-            XCTAssertFalse(contents.contains("prefix: \"zai\"\n    base-url: \"https://api.z.ai/api/anthropic\""),
-                           "Config must not emit zai block when the only credential has minimax type")
         }
     }
 
@@ -938,13 +1068,12 @@ final class ServerManagerConfigTests: XCTestCase {
             let configPath = manager.getConfigPath()
 
             guard let contents = readConfig(at: configPath) else { return }
+            let entries = claudeAPIKeyEntries(from: contents)
 
             // The key should NOT appear under the kimi prefix (wrong provider)
             // but MAY appear under the zai prefix (correct JSON type)
-            XCTAssertFalse(contents.contains("prefix: \"kimi\""),
+            XCTAssertNil(entry(withPrefix: "kimi", in: entries),
                            "Config must not emit kimi block for mismatched type file")
-            XCTAssertFalse(contents.contains("prefix: \"kimi\"\n    base-url: \"https://api.kimi.com/coding/\""),
-                           "Config must not emit kimi block when the only credential has zai type")
         }
     }
 
@@ -969,14 +1098,13 @@ final class ServerManagerConfigTests: XCTestCase {
     /// must still be recognized for config generation. JSON "type" is the
     /// authoritative provider identifier, not the filename prefix.
     func testConfigIncludesProviderWithValidTypeButUnexpectedFilename() {
-        let providers: [(String, ServiceType)] = [
-            ("zai", .zai),
-            ("minimax", .minimax),
-            ("kimi", .kimi),
-            ("opencode-go", .opencodeGo)
+        let providers = [
+            "zai",
+            "minimax",
+            "opencode-go"
         ]
 
-        for (providerType, serviceType) in providers {
+        for providerType in providers {
             XCTContext.runActivity(named: "Valid type with unexpected filename for \(providerType)") { _ in
                 withTemporaryAuthDirectory { authDir in
                     // Write a credential with an unexpected filename (e.g. "backup-xxx.json")
@@ -992,13 +1120,36 @@ final class ServerManagerConfigTests: XCTestCase {
                     let configPath = manager.getConfigPath()
 
                     guard let contents = readConfig(at: configPath) else { return }
+                    let entries = claudeAPIKeyEntries(from: contents)
+                    let providerEntry = entry(withPrefix: providerType, in: entries)
 
-                    XCTAssertTrue(contents.contains("prefix: \"\(providerType)\""),
+                    XCTAssertNotNil(providerEntry,
                                   "\(providerType) config must be emitted when JSON type is correct regardless of filename")
-                    XCTAssertTrue(contents.contains("api-key: \"valid-key-unexpected-name\""),
+                    XCTAssertEqual(providerEntry?["api-key"] as? String, "valid-key-unexpected-name",
                                   "\(providerType) config must include the key from correctly-typed file with unexpected name")
                 }
             }
+        }
+    }
+
+    func testConfigDoesNotIncludeKimiWithValidTypeButUnexpectedFilename() {
+        withTemporaryAuthDirectory { authDir in
+            writeCredentialWithFilename(
+                filename: "backup-\(UUID().uuidString).json",
+                provider: "kimi",
+                apiKey: "valid-kimi-key-unexpected-name",
+                authDir: authDir
+            )
+
+            let manager = makeManager(authDir: authDir)
+            let configPath = manager.getConfigPath()
+
+            guard let contents = readConfig(at: configPath) else { return }
+            let entries = claudeAPIKeyEntries(from: contents)
+
+            XCTAssertNil(entry(withPrefix: "kimi", in: entries),
+                         "Kimi should remain excluded from generated claude-api-key config regardless of credential filename")
+            XCTAssertFalse(entries.compactMap { $0["api-key"] as? String }.contains("valid-kimi-key-unexpected-name"))
         }
     }
 
@@ -1009,7 +1160,6 @@ final class ServerManagerConfigTests: XCTestCase {
         let providers: [(String, ServiceType)] = [
             ("zai", .zai),
             ("minimax", .minimax),
-            ("kimi", .kimi),
             ("opencode-go", .opencodeGo)
         ]
 
@@ -1213,7 +1363,9 @@ extension ServerManagerConfigTests {
 
     private func writeOAuthCredential(provider: String, authDir: URL,
                                        email: String = "test@test.com",
-                                       disabled: Bool = false, expired: String? = nil) {
+                                       disabled: Bool = false,
+                                       accessToken: String? = nil,
+                                       expired: String? = nil) {
         let file = authDir.appendingPathComponent("\(provider)-test-\(UUID().uuidString).json")
         var credential: [String: Any] = [
             "type": provider,
@@ -1223,6 +1375,9 @@ extension ServerManagerConfigTests {
         ]
         if disabled {
             credential["disabled"] = true
+        }
+        if let accessToken {
+            credential["access_token"] = accessToken
         }
         if let expired {
             credential["expired"] = expired
@@ -1298,90 +1453,41 @@ extension ServerManagerConfigTests {
         }
     }
 
+    private func parseConfig(_ contents: String) -> [String: Any] {
+        do {
+            guard let document = try Yams.load(yaml: contents) as? [String: Any] else {
+                XCTFail("Generated config should parse as a YAML mapping")
+                return [:]
+            }
+            return document
+        } catch {
+            XCTFail("Generated config should be valid YAML: \(error)")
+            return [:]
+        }
+    }
+
+    private func claudeAPIKeyEntries(from contents: String) -> [[String: Any]] {
+        parseConfig(contents)["claude-api-key"] as? [[String: Any]] ?? []
+    }
+
+    private func entry(withPrefix prefix: String, in entries: [[String: Any]]) -> [String: Any]? {
+        entries.first { $0["prefix"] as? String == prefix }
+    }
+
+    private func modelNames(in entry: [String: Any]?) -> [String] {
+        guard let models = entry?["models"] as? [[String: Any]] else { return [] }
+        return models.compactMap { $0["name"] as? String }
+    }
+
+    private func oauthExcludedModels(from contents: String) -> [String: Any] {
+        parseConfig(contents)["oauth-excluded-models"] as? [String: Any] ?? [:]
+    }
+
     private func restoreUserDefault(_ value: Any?, forKey key: String) {
         if let value {
             UserDefaults.standard.set(value, forKey: key)
         } else {
             UserDefaults.standard.removeObject(forKey: key)
         }
-    }
-
-    private func decodeYamlDoubleQuotedScalar(_ scalar: String) -> String {
-        guard scalar.hasPrefix("\"") && scalar.hasSuffix("\"") && scalar.count >= 2 else {
-            return scalar
-        }
-        let start = scalar.index(after: scalar.startIndex)
-        let end = scalar.index(before: scalar.endIndex)
-        let content = scalar[start..<end]
-
-        var result = ""
-        var i = content.startIndex
-
-        while i < content.endIndex {
-            let char = content[i]
-            if char == "\\" {
-                let next = content.index(after: i)
-                guard next < content.endIndex else {
-                    result.append("\\")
-                    break
-                }
-                let nextChar = content[next]
-                switch nextChar {
-                case "\\": result.append("\\")
-                case "\"": result.append("\"")
-                case "n": result.append("\n")
-                case "t": result.append("\t")
-                case "r": result.append("\r")
-                case "0": result.append("\0")
-                case "a": result.append("\u{07}")
-                case "b": result.append("\u{08}")
-                case "f": result.append("\u{0C}")
-                case "v": result.append("\u{0B}")
-                case " ": result.append(" ")
-                default: result.append(nextChar)
-                }
-                i = content.index(after: next)
-            } else {
-                result.append(char)
-                i = content.index(after: i)
-            }
-        }
-
-        return result
-    }
-
-    private func extractAllApiKeyValues(from configContent: String) -> [String] {
-        var results: [String] = []
-        let lines = configContent.components(separatedBy: "\n")
-
-        for line in lines {
-            guard let prefixRange = line.range(of: "- api-key: \"") else { continue }
-            let afterOpeningQuote = prefixRange.upperBound
-
-            var pos = afterOpeningQuote
-            var rawContent = ""
-            while pos < line.endIndex {
-                let char = line[pos]
-                if char == "\\" {
-                    rawContent.append(char)
-                    let next = line.index(after: pos)
-                    if next < line.endIndex {
-                        rawContent.append(line[next])
-                        pos = line.index(after: next)
-                    } else {
-                        pos = line.index(after: pos)
-                    }
-                } else if char == "\"" {
-                    break
-                } else {
-                    rawContent.append(char)
-                    pos = line.index(after: pos)
-                }
-            }
-
-            results.append(decodeYamlDoubleQuotedScalar("\"" + rawContent + "\""))
-        }
-
-        return results
     }
 }
