@@ -19,7 +19,11 @@ if [ ! -x "$SIGN_UPDATE" ]; then
   exit 1
 fi
 
-SIGNATURE="$($SIGN_UPDATE -p "$ARCHIVE_PATH")"
+if [ -n "${SPARKLE_PRIVATE_KEY_FILE:-}" ]; then
+  SIGNATURE="$($SIGN_UPDATE --ed-key-file "$SPARKLE_PRIVATE_KEY_FILE" "$ARCHIVE_PATH" | sed -E 's/.*sparkle:edSignature="([^"]+)".*/\1/')"
+else
+  SIGNATURE="$($SIGN_UPDATE -p "$ARCHIVE_PATH")"
+fi
 if [ -z "$SIGNATURE" ]; then
   echo "Failed to extract sparkle:edSignature" >&2
   exit 1
