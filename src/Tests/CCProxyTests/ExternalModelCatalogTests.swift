@@ -1,8 +1,6 @@
 import XCTest
 @testable import CCProxy
 
-// MARK: - Test Doubles
-
 final class ExternalModelCatalogTests: XCTestCase {
 
     // MARK: - Fixtures
@@ -1435,7 +1433,7 @@ final class ExternalModelCatalogTests: XCTestCase {
                        "Missing created should default to 0")
     }
 
-    // MARK: - Review Fix: Already-Qualified IDs
+    // MARK: - Already-Qualified ID Tests
 
     func testFilter_alreadyQualifiedIds_remainQualifiedExactlyOnce() {
         // models.dev may return IDs that already contain the provider prefix
@@ -1478,7 +1476,7 @@ final class ExternalModelCatalogTests: XCTestCase {
                        "Should contain exactly-qualified opencode-go/claude-sonnet-4")
     }
 
-    // MARK: - Review Fix: Secondary Fills Missing Models for Partially-Covered Providers
+    // MARK: - Secondary Provider Fill Policy Tests
 
     func testMerge_secondaryDoesNotFillModelsForPrimaryOnlyProvider() {
         // Primary covers codex with gpt-4o and o3
@@ -1534,7 +1532,7 @@ final class ExternalModelCatalogTests: XCTestCase {
         XCTAssertEqual(gpt4o.ownedBy, "openai", "Primary model owned_by must be preserved")
     }
 
-    // MARK: - Review Fix: Codex Client Metadata Preserves Supplemental Fields
+    // MARK: - Codex Client Metadata Tests
 
     func testMerge_codexClientPreservesSupplementalMetadataBySlug() {
         let primaryFixture: Data = """
@@ -1616,7 +1614,7 @@ final class ExternalModelCatalogTests: XCTestCase {
         XCTAssertEqual(mapping["opencode-go"], "opencode-go")
     }
 
-    // MARK: - Quality Review Fix: Deterministic Ordering
+    // MARK: - Deterministic Ordering Tests
 
     func testDeterministicProviderModelOrdering() {
         let primary = ExternalModelCatalog.parseModelsJSON(Self.modelsJSONFixture)!
@@ -1681,7 +1679,7 @@ final class ExternalModelCatalogTests: XCTestCase {
                        "Winning model display name should match the free tier entry")
     }
 
-    // MARK: - Quality Review Fix: Clock Injection
+    // MARK: - Clock Injection Tests
 
     func testMergeGeneratedAtUsesInjectedClock() {
         let fixedDate = Date(timeIntervalSince1970: 1700000000)
@@ -1766,7 +1764,7 @@ final class ExternalModelCatalogTests: XCTestCase {
                      "Failure metadata should be cleared after successful refresh")
     }
 
-    // MARK: - Quality Fix: Fresh In-Memory Preferred Over Stale Disk Cache
+    // MARK: - In-Memory Cache Preference Tests
 
     func testCache_prefersFreshInMemoryOverStaleDiskWhenPersistenceFails() {
         let now = Date()
@@ -1823,7 +1821,7 @@ final class ExternalModelCatalogTests: XCTestCase {
         )
     }
 
-    // MARK: - Quality Review Fix: In-Memory Snapshot and Persistence
+    // MARK: - In-Memory Snapshot and Persistence Tests
 
     func testServesInMemorySnapshotWhenPersistenceFails() {
         let fixedDate = Date(timeIntervalSince1970: 1700000000)
@@ -1904,7 +1902,7 @@ final class ExternalModelCatalogTests: XCTestCase {
                       "Failure should record models.dev error")
     }
 
-    // MARK: - Review Fix: CatalogModelsResult Distinction
+    // MARK: - CatalogModelsResult Distinction Tests
 
     /// Verifies that CatalogModelsResult.unavailable is distinct from .available([]).
     /// This distinction is critical: connected-provider-empty means a valid empty model list
@@ -2021,7 +2019,7 @@ final class ExternalModelCatalogTests: XCTestCase {
         }
     }
 
-    // MARK: - Quality Fix: CacheCoordinator Thread Safety
+    // MARK: - CacheCoordinator Thread Safety Tests
 
     /// Verifies that concurrent getCatalog() calls do not crash or produce
     /// inconsistent results. The CacheCoordinator's mutable state must be
@@ -2112,7 +2110,7 @@ final class ExternalModelCatalogTests: XCTestCase {
                                   "Concurrent stale cache reads should trigger bounded refresh attempts, got \(fetcher.totalFetchCount)")
     }
 
-    // MARK: - Review Fix: URLSessionCatalogFetcher Tests
+    // MARK: - URLSessionCatalogFetcher Tests
 
     /// Verifies that URLSessionCatalogFetcher uses a configured timeout
     /// (does not wait indefinitely).
@@ -2199,7 +2197,7 @@ final class ExternalModelCatalogTests: XCTestCase {
         }
     }
 
-    // MARK: - Task 4: Bundled Snapshot Loading and Determinism
+    // MARK: - Bundled Snapshot Loading and Determinism Tests
 
     /// Verifies that the bundled snapshot loader reads from a main-bundle-style
     /// resource URL (CCProxy.app/Contents/Resources) without relying on
@@ -2478,7 +2476,6 @@ final class ExternalModelCatalogTests: XCTestCase {
             // Extract model IDs from the provider section
             var modelIds: [String] = []
             let idPattern = "\"id\" : \""
-            var searchStart = afterProvider.startIndex
             var depth = 1
             var charIdx = afterProvider.startIndex
 
@@ -2510,7 +2507,7 @@ final class ExternalModelCatalogTests: XCTestCase {
         }
     }
 
-    // MARK: - Review Fix: Bundled Snapshot Source Metadata Enforcement at Runtime
+    // MARK: - Runtime Bundled Snapshot Source Metadata Tests
 
     /// Verifies that the actual loading path (CacheCoordinator.loadBundledSnapshot)
     /// rejects a bundled snapshot that has empty sources metadata.
@@ -2619,7 +2616,7 @@ final class ExternalModelCatalogTests: XCTestCase {
         }
     }
 
-    // MARK: - Review Fix: Generator Reuse/Failure Behavior Tests
+    // MARK: - Generator Reuse and Failure Behavior Tests
 
     /// Verifies that when all fetches fail but a valid snapshot exists,
     /// the cache coordinator serves the existing bundled snapshot (reuse-on-failure).
@@ -2968,7 +2965,7 @@ final class ExternalModelCatalogTests: XCTestCase {
                              "Bundled snapshot must contain at least one model entry")
     }
 
-    // MARK: - Runtime Cache Policy Validation Tests (Task 2A)
+    // MARK: - Runtime Cache Policy Validation Tests
 
     /// Verifies that a stale runtime cache with old policy schema "1" is rejected
     /// and falls back to the bundled snapshot with current policy schema "2".
@@ -3131,11 +3128,10 @@ final class ExternalModelCatalogTests: XCTestCase {
                      "secondaryProviderMapping must not contain 'codex' — OAuth-only, removed in v0.3.1")
     }
 
-    // MARK: - Catalog Source Policy Tests (Task 1)
+    // MARK: - Catalog Source Policy Tests
 
     /// Verifies that secondaryProviderMapping excludes OAuth providers (claude, codex)
     /// and retains only compatible/API-key secondary providers (zai, minimax, opencode-go).
-    /// RED: Currently fails because secondaryProviderMapping still maps claude→anthropic and codex→openai.
     func testProviderSourcePolicy_secondaryMappingExcludesOAuthProviders() {
         let mapping = ExternalModelCatalog.secondaryProviderMapping
 
@@ -3158,10 +3154,6 @@ final class ExternalModelCatalogTests: XCTestCase {
 
     /// Verifies that a models.dev-only fixture containing anthropic and openai providers
     /// does not expose claude/ or codex/ models after merge and filter.
-    /// RED: Currently fails because parseModelsDev maps anthropic→claude and openai→codex
-    /// via secondaryProviderMapping, producing claude/ and codex/ models.
-    /// GREEN path: after removing claude/codex from secondaryProviderMapping, parseModelsDev
-    /// returns nil for this fixture (no reverse-mapped providers), so no OAuth models emerge.
     func testProviderSourcePolicy_modelsDevOnlyFixtureDoesNotExposeOAuthProviders() {
         let oauthOnlyFixture: Data = """
         {
@@ -3179,16 +3171,10 @@ final class ExternalModelCatalogTests: XCTestCase {
         }
         """.data(using: .utf8)!
 
-        // If parseModelsDev returns nil, the fixture has no mappable providers —
-        // trivially no OAuth models can be produced. No merge/filter needed.
         guard let secondary = ExternalModelCatalog.parseModelsDev(oauthOnlyFixture) else {
-            // Desired GREEN behavior: OAuth-only providers are not in secondaryProviderMapping,
-            // so parseModelsDev produces no valid providers → returns nil.
             return
         }
 
-        // RED path: parseModelsDev did map the OAuth providers, so verify the merged/filtered
-        // output does not expose them.
         let connected: Set<String> = ["claude", "codex"]
         let filtered: [CatalogModel]
         if let merged = ExternalModelCatalog.mergeCatalogs(
@@ -3238,7 +3224,6 @@ final class ExternalModelCatalogTests: XCTestCase {
     /// Verifies that merging all sources does not add models.dev-only OAuth models.
     /// Claude IDs must be exactly claude-opus-4 and claude-sonnet-4 (from primary only),
     /// and codex IDs must not include gpt-4o-mini (models.dev-only model).
-    /// RED: Currently fails because secondary fills gpt-4o-mini into codex.
     func testProviderSourcePolicy_mergeDoesNotAddModelsDevOnlyOAuthModels() {
         let primary = ExternalModelCatalog.parseModelsJSON(Self.modelsJSONFixture)!
         let codexClient = ExternalModelCatalog.parseCodexClientModels(Self.codexClientFixture)!
@@ -3315,7 +3300,7 @@ final class ExternalModelCatalogTests: XCTestCase {
                        "xai provider must be present with bare grok model IDs")
     }
 
-    // MARK: - Source URL Policy Tests (Task 0)
+    // MARK: - Source URL Policy Tests
 
     /// Derives the SwiftPM package root and repository root from the test file path.
     /// Walks parent directories from #filePath until finding Package.swift;

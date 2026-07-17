@@ -14,9 +14,7 @@ import XCTest
 
 final class ThinkingProxyModelAliasTests: XCTestCase {
 
-    // ================================================================
     // MARK: - Request Alias Rewrite Tests
-    // ================================================================
 
     // MARK: All nine spec alias mappings
 
@@ -177,9 +175,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         XCTAssertNil(result, "JSON array should return nil")
     }
 
-    // ================================================================
     // MARK: - Eligibility Helper Tests
-    // ================================================================
 
     func testGetV1ModelsIsEligible() {
         XCTAssertTrue(isModelListRequest(method: "GET", path: "/v1/models"),
@@ -221,9 +217,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
                         "DELETE /v1/models should not be eligible")
     }
 
-    // ================================================================
     // MARK: - T3 Integration: Composition & Content-Length Tests
-    // ================================================================
 
     /// Verifies that alias rewriting preserves all non-model body fields
     /// (messages, temperature, max_tokens, stream) unchanged.
@@ -243,10 +237,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             return
         }
 
-        // Model was rewritten
         XCTAssertEqual(json["model"] as? String, "zai/glm-4.7")
 
-        // Other fields preserved
         XCTAssertEqual(json["temperature"] as? Double, 0.7)
         XCTAssertEqual(json["max_tokens"] as? Int, 4096)
         XCTAssertEqual(json["stream"] as? Bool, true)
@@ -276,7 +268,6 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
 
         guard let rewritten = rewrittenBody else { return }
 
-        // Simulate original request headers with stale Content-Length
         let staleHeaders: [(String, String)] = [
             ("Content-Type", "application/json"),
             ("Content-Length", "\(originalBody.utf8.count)"),
@@ -284,8 +275,6 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             ("Authorization", "Bearer test-key")
         ]
 
-        // Build the forwarded request using the same production helper
-        // that forwardRequest calls internally.
         let forwarded = buildForwardedLocalRequest(
             method: "POST",
             path: "/v1/chat/completions",
@@ -297,18 +286,15 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             targetPort: 8328
         )
 
-        // Extract Content-Length from the forwarded request
         let contentLengthFromForwarded = extractContentLength(from: forwarded)
         XCTAssertNotNil(contentLengthFromForwarded,
                          "Forwarded request must contain a Content-Length header")
 
         guard let forwardedCL = contentLengthFromForwarded else { return }
 
-        // Content-Length must equal the rewritten body byte count
         XCTAssertEqual(forwardedCL, rewritten.utf8.count,
                         "Forwarded Content-Length must equal rewritten body byte count")
 
-        // Content-Length must NOT equal the original (stale) body byte count
         XCTAssertNotEqual(forwardedCL, originalBody.utf8.count,
                             "Forwarded Content-Length must NOT equal original stale body byte count")
     }
@@ -334,33 +320,27 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         let result = canonicalizeTopLevelModelAlias(in: canonicalBody)
         XCTAssertNil(result, "Already-canonical model should return nil (no rewrite)")
 
-        // Content-Length would be based on the unmodified body
         let contentLength = canonicalBody.utf8.count
         XCTAssertEqual(contentLength, canonicalBody.utf8.count,
                         "Content-Length for canonical model should be unchanged")
     }
 
-    // ================================================================
     // MARK: - Legacy Runtime-Composed Alias Removal Tests
-    // ================================================================
 
     /// Verifies that a legacy runtime-composed alias-prefixed thinking model
     /// is no longer special-cased by the thinking parameter processor.
     /// After removal, the seam should return no transformation for that model body.
     func testLegacyPrefixedThinkingModelIsNotSpecialCased() {
-        // Build the legacy alias prefix from fragments to avoid searchable tokens
         let legacyPrefix = "ge" + "mi" + "ni-claude-"
         let model = legacyPrefix + "opus-4-5-thinking-10000"
         let input = """
         {"model":"\(model)","messages":[{"role":"user","content":"hi"}],"max_tokens":4096}
         """
         let result = processThinkingParameterForTesting(jsonString: input)
-        // After removal, legacy-prefixed models are NOT Claude models, so no transformation
         XCTAssertNotNil(result, "Should return a result for unrecognized model")
         if let (body, thinkingEnabled) = result {
             XCTAssertFalse(thinkingEnabled,
                            "Legacy-prefixed model should not have thinking enabled")
-            // Body should be returned as-is (passthrough for non-Claude)
             XCTAssertEqual(body, input, "Non-Claude model body should pass through unchanged")
         }
     }
@@ -380,9 +360,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         }
     }
 
-    // ================================================================
     // MARK: - Helpers
-    // ================================================================
 
     private func assertModelEquals(result: String?, expected: String) {
         guard let result = result else {
@@ -414,9 +392,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             .first
     }
 
-    // ================================================================
     // MARK: - HTTP Response Test Helpers
-    // ================================================================
 
     /// Builds a complete raw HTTP response as Data from status, headers, and body string.
     private func buildHTTPResponse(
@@ -475,9 +451,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         return headers.filter { $0.0.caseInsensitiveCompare(name) == .orderedSame }.count
     }
 
-    // ================================================================
     // MARK: - Task 3: Catalog-Backed Model-List Response Tests
-    // ================================================================
     //
     // Tests for: transformModelListHTTPResponseWithCatalog(method:path:responseData:catalogModels:) -> Data?
     //
@@ -497,6 +471,28 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
 
     /// Empty catalog models — no connected providers.
     private var emptyCatalogModels: [CatalogModel] { [] }
+
+    private func temporaryDirectory(named prefix: String) -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return directory
+    }
+
+    private func successfulCatalogFetcher() -> FakeCatalogFetcher {
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
+        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+        return fetcher
+    }
+
+    private func failingCatalogFetcher() -> FakeCatalogFetcher {
+        let fetcher = FakeCatalogFetcher()
+        fetcher.modelsJSONError = NSError(domain: "test", code: 1)
+        fetcher.modelsDevError = NSError(domain: "test", code: 1)
+        return fetcher
+    }
 
     // MARK: - Catalog replaces backend body
 
@@ -527,7 +523,6 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             return
         }
 
-        // Body should be catalog-rendered, not backend body
         guard let bodyData = parsed.body.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
               let entries = json["data"] as? [[String: Any]] else {
@@ -612,10 +607,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             return
         }
 
-        // Status preserved
         XCTAssertTrue(parsed.statusLine.hasPrefix("HTTP/1.1 200"))
 
-        // Content-Length recalculated
         let cl = headerValue(in: parsed.headers, name: "Content-Length")
         XCTAssertNotNil(cl)
         if let clStr = cl, let clVal = Int(clStr) {
@@ -623,15 +616,12 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
                             "Content-Length must equal catalog body byte count")
         }
 
-        // Transfer-Encoding removed
         XCTAssertEqual(headerCount(in: parsed.headers, name: "Transfer-Encoding"), 0,
                         "Transfer-Encoding should be removed")
 
-        // Connection: close exactly once
         XCTAssertEqual(headerCount(in: parsed.headers, name: "Connection"), 1)
         XCTAssertEqual(headerValue(in: parsed.headers, name: "Connection"), "close")
 
-        // Custom header preserved
         XCTAssertEqual(headerValue(in: parsed.headers, name: "X-Custom"), "value")
     }
 
@@ -903,9 +893,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         assertModelEquals(result: result, expected: "zai/glm-4.7")
     }
 
-    // ================================================================
     // MARK: - T4 Fix: Buffered Response Classification Seam Tests
-    // ================================================================
     //
     // Tests for: classifyBufferedModelListResponse(_:) -> ModelListBufferClassification
     //
@@ -1048,7 +1036,6 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
     func testClassify_BodySmallerThanCL_BodyIncomplete() {
         let body = duplicateModelListBody
         let fullCL = body.utf8.count
-        // Build response with correct CL but only partial body
         let partialBody = String(body.prefix(body.utf8.count / 2))
         let response = buildHTTPResponse(
             headers: [
@@ -1120,9 +1107,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
                         "Body bytes > Content-Length should classify as bodyOverflow")
     }
 
-    // ================================================================
     // MARK: - Review Fix: Production Catalog Provider Wiring
-    // ================================================================
 
     /// Verifies that ThinkingProxy's default catalogProvider starts as a stub
     /// (returns unavailable), and gets replaced when configureCatalogProvider is called.
@@ -1219,14 +1204,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
     /// Verifies that a ProductionModelListCatalogProvider returns .unavailable
     /// when no runtime cache or bundled snapshot exists.
     func testProductionProvider_ReturnsUnavailableWhenNoCacheAndNoSnapshot() {
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-unavailable-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
-
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONError = NSError(domain: "test", code: 1)
-        fetcher.modelsDevError = NSError(domain: "test", code: 1)
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-unavailable")
+        let fetcher = failingCatalogFetcher()
 
         let coordinator = CacheCoordinator(
             clock: SystemClock(),
@@ -1251,14 +1230,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
     /// Verifies that a ProductionModelListCatalogProvider returns .available([])
     /// when a valid catalog exists but no connected providers match.
     func testProductionProvider_ReturnsAvailableEmptyWhenCatalogExistsButNoProviders() {
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-empty-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
-
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
-        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-empty")
+        let fetcher = successfulCatalogFetcher()
 
         let coordinator = CacheCoordinator(
             clock: SystemClock(),
@@ -1285,14 +1258,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
     /// Verifies that a ProductionModelListCatalogProvider returns .available([models])
     /// when catalog data and connected providers exist.
     func testProductionProvider_ReturnsAvailableModelsWhenCatalogAndProvidersExist() {
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-models-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
-
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
-        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-models")
+        let fetcher = successfulCatalogFetcher()
 
         let coordinator = CacheCoordinator(
             clock: SystemClock(),
@@ -1339,10 +1306,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             defaults.synchronize()
         }
 
-        let authDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-inject-auth-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: authDir) }
+        let authDir = temporaryDirectory(named: "ccproxy-test-inject-auth")
 
         // Write a claude credential so the manager reports claude as connected
         let credFile = authDir.appendingPathComponent("claude-test-cred.json")
@@ -1357,14 +1321,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
 
         let proxy = ThinkingProxy()
 
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-inject-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
-
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
-        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-inject")
+        let fetcher = successfulCatalogFetcher()
 
         // Wire through the production path with injected fake dependencies
         proxy.configureCatalogProvider(
@@ -1383,7 +1341,6 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             XCTFail("configureCatalogProvider with fake fetcher should return .available, got \(result)")
         }
 
-        // Verify the fake fetcher was called (proving injection works, no URLSession)
         XCTAssertGreaterThan(fetcher.totalFetchCount, 0,
                               "Should use injected fetcher, not URLSession")
     }
@@ -1401,9 +1358,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         // The model list is entirely generated by catalog-backed filtering
     }
 
-    // ================================================================
     // MARK: - Review Fix: Unavailable Must Not Pass Through Backend
-    // ================================================================
 
     /// Verifies that when the catalog is unavailable, the response does NOT
     /// pass through the backend model-list body. Instead, it produces an
@@ -1512,22 +1467,14 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         XCTAssertNil(result, "Non-2xx should return nil even when catalog is unavailable")
     }
 
-    // ================================================================
     // MARK: - Review Fix: Production Provider Uses Injected Closure
-    // ================================================================
 
     /// Verifies that ProductionModelListCatalogProvider uses the injected
     /// connectedProvidersProvider closure rather than duplicating parsing logic.
     /// This proves the production wiring delegates to the closure.
     func testProductionProvider_UsesInjectedConnectedProvidersClosure() {
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-closure-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
-
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
-        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-closure")
+        let fetcher = successfulCatalogFetcher()
 
         let coordinator = CacheCoordinator(
             clock: SystemClock(),
@@ -1563,14 +1510,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
     /// Verifies that createDefault produces a provider that uses an injected
     /// connected-providers closure (not ServerManager.shared or duplicate parsing).
     func testProductionProvider_CreateDefaultUsesInjectedClosure() {
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-createdefault-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
-
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
-        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-createdefault")
+        let fetcher = successfulCatalogFetcher()
 
         var closureCallCount = 0
         let provider = ProductionModelListCatalogProvider.createDefault(
@@ -1588,22 +1529,14 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
                         "createDefault should use the injected connected-providers closure")
     }
 
-    // ================================================================
     // MARK: - T3 Remediation: No Singleton Divergence
-    // ================================================================
 
     /// Verifies that catalog filtering uses only the injected ServerManager's
     /// connected-provider state, not a singleton or separately constructed manager.
     /// Two managers with conflicting state: injected one must control filtering.
     func testInjectedManagerControlsFiltering_NotSingleton() {
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-inject-state-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
-
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
-        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-inject-state")
+        let fetcher = successfulCatalogFetcher()
 
         let coordinator = CacheCoordinator(
             clock: SystemClock(),
@@ -1637,14 +1570,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
     /// Verifies that the production default catalog-provider path performs zero
     /// live URLSession calls when injected with a fake fetcher.
     func testProductionDefault_NoLiveNetworkWithInjectedFetcher() {
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-no-network-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
-
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
-        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-no-network")
+        let fetcher = successfulCatalogFetcher()
 
         let provider = ProductionModelListCatalogProvider.createDefault(
             connectedProvidersProvider: { ["claude"] },
@@ -1660,7 +1587,6 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             XCTFail("Expected .available from injected fake fetcher, got \(result)")
         }
 
-        // Verify the fake fetcher was called (proving injection works)
         XCTAssertGreaterThan(fetcher.totalFetchCount, 0,
                               "Should use injected fetcher, not URLSession")
     }
@@ -1670,10 +1596,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
     func testProductionDefault_NoFetchAfterStaleFailureWithinThrottle() {
         let now = Date()
         let clock = FakeClock(now)
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-throttle-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-throttle")
 
         // Write a stale cache
         let staleSnapshot = CatalogSnapshot(
@@ -1696,10 +1619,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             ofItemAtPath: cacheFile.path
         )
 
-        // Fetcher that fails — simulates network error during stale refresh
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONError = NSError(domain: "test", code: 1)
-        fetcher.modelsDevError = NSError(domain: "test", code: 1)
+        let fetcher = failingCatalogFetcher()
 
         let coordinator = CacheCoordinator(
             clock: clock,
@@ -1724,9 +1644,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
                         "Second call within 15-min throttle should not fetch again")
     }
 
-    // ================================================================
     // MARK: - Quality Fix: configureCatalogProvider with Real ServerManager
-    // ================================================================
 
     /// Verifies that ThinkingProxy.configureCatalogProvider(ServerManager) uses
     /// the real ServerManager's connectedProviders() state to control /v1/models
@@ -1747,10 +1665,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             defaults.synchronize()
         }
 
-        let authDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-real-sm-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: authDir) }
+        let authDir = temporaryDirectory(named: "ccproxy-test-real-sm")
 
         // Write a valid opencode-go credential
         let credFile = authDir.appendingPathComponent("opencode-go-test-cred.json")
@@ -1772,14 +1687,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         // Set up ThinkingProxy using the production wiring path with injected deps
         let proxy = ThinkingProxy()
 
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-real-cache-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
-
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
-        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-real-cache")
+        let fetcher = successfulCatalogFetcher()
 
         proxy.configureCatalogProvider(
             manager,
@@ -1816,10 +1725,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
             defaults.synchronize()
         }
 
-        let authDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-disable-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: authDir) }
+        let authDir = temporaryDirectory(named: "ccproxy-test-disable")
 
         // Write both opencode-go and zai credentials
         for provider in ["opencode-go", "zai"] {
@@ -1840,14 +1746,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         XCTAssertTrue(connected.contains(.opencodeGo))
         XCTAssertTrue(connected.contains(.zai))
 
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-disable-cache-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
-
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
-        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-disable-cache")
+        let fetcher = successfulCatalogFetcher()
 
         let proxy = ThinkingProxy()
         proxy.configureCatalogProvider(
@@ -1886,14 +1786,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
     /// connected-providers closure for filtering, not ServerManager.shared.
     /// If ServerManager.shared were used, the result would be empty (no real auth dir).
     func testProductionDefault_UsesInjectedClosureNotSingleton() {
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-no-singleton-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
-
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
-        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-no-singleton")
+        let fetcher = successfulCatalogFetcher()
 
         // Create default with explicit closure returning "opencode-go"
         let provider = ProductionModelListCatalogProvider.createDefault(
@@ -1917,9 +1811,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         }
     }
 
-    // ================================================================
     // MARK: - Conflicting Manager Test: Injected Manager Controls Output
-    // ================================================================
 
     /// Verifies that two real ServerManager instances with conflicting state
     /// produce different /v1/models output, and that ThinkingProxy follows
@@ -1941,10 +1833,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         }
 
         // Manager A: opencode-go only
-        let authDirA = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-mgr-a-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: authDirA, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: authDirA) }
+        let authDirA = temporaryDirectory(named: "ccproxy-test-mgr-a")
 
         let credA = authDirA.appendingPathComponent("opencode-go-cred.json")
         try! JSONSerialization.data(withJSONObject: [
@@ -1957,10 +1846,7 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         managerA.authDirectoryOverride = authDirA
 
         // Manager B: zai only
-        let authDirB = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-mgr-b-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: authDirB, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: authDirB) }
+        let authDirB = temporaryDirectory(named: "ccproxy-test-mgr-b")
 
         let credB = authDirB.appendingPathComponent("zai-cred.json")
         try! JSONSerialization.data(withJSONObject: [
@@ -1981,14 +1867,8 @@ final class ThinkingProxyModelAliasTests: XCTestCase {
         XCTAssertFalse(connectedB.contains(.opencodeGo), "Manager B should NOT have opencode-go connected")
 
         // Shared cache and fetcher fixtures
-        let cacheDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ccproxy-test-conflict-cache-\(UUID().uuidString)", isDirectory: true)
-        try! FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDir) }
-
-        let fetcher = FakeCatalogFetcher()
-        fetcher.modelsJSONData = ExternalModelCatalogTests.modelsJSONFixture
-        fetcher.modelsDevData = ExternalModelCatalogTests.modelsDevFixture
+        let cacheDir = temporaryDirectory(named: "ccproxy-test-conflict-cache")
+        let fetcher = successfulCatalogFetcher()
 
         // Wire proxy with managerA via configureCatalogProvider
         let proxy = ThinkingProxy()
