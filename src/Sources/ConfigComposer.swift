@@ -23,7 +23,6 @@ enum ConfigComposer {
         case bundledConfigIsNotMapping
     }
 
-    /// Pure core: returns merged YAML string.
     static func compose(bundledYAML: String, userOverlayYAML: String?, upstreams: [ClaudeCompatibleUpstream], disabledOAuthProviders: [String], managementSecretKey: String) throws -> String {
         guard var root = try Yams.compose(yaml: bundledYAML) else {
             throw CompositionError.emptyBundledConfig
@@ -49,7 +48,6 @@ enum ConfigComposer {
         return try Yams.serialize(node: root, sortKeys: false)
     }
 
-    /// IO wrapper: writes <authDir>/merged-config.yaml with posix 0600 and returns its path; when upstreams is empty AND disabledOAuthProviders is empty AND managementSecretKey is empty AND no user overlay file exists, returns bundledConfigPath without writing.
     static func writeMergedConfig(bundledConfigPath: String, authDir: URL, userConfigPath: URL?, upstreams: [ClaudeCompatibleUpstream], disabledOAuthProviders: [String], managementSecretKey: String) throws -> String {
         let overlayExists = userConfigPath.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
         guard !upstreams.isEmpty || !disabledOAuthProviders.isEmpty || !managementSecretKey.isEmpty || overlayExists else {
@@ -134,7 +132,6 @@ private extension ConfigComposer {
     }
 
     static func containsOnlyNamedMappings(_ nodes: [Node]) -> Bool {
-        guard !nodes.isEmpty else { return true }
         return nodes.allSatisfy { name(in: $0) != nil }
     }
 
