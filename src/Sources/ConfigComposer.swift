@@ -31,7 +31,7 @@ enum ConfigComposer {
             throw CompositionError.bundledConfigIsNotMapping
         }
 
-        if let userOverlayYAML {
+        if let userOverlayYAML, !isEmptyOverlay(userOverlayYAML) {
             guard let overlay = try Yams.compose(yaml: userOverlayYAML) else {
                 throw CompositionError.emptyBundledConfig
             }
@@ -71,8 +71,7 @@ enum ConfigComposer {
 
         try FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
         let mergedConfigURL = authDir.appendingPathComponent("merged-config.yaml")
-        try mergedYAML.write(to: mergedConfigURL, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: mergedConfigURL.path)
+        try SecureFileWriter.write(Data(mergedYAML.utf8), to: mergedConfigURL)
         return mergedConfigURL.path
     }
 }
@@ -180,10 +179,18 @@ private extension ConfigComposer {
 
     static func setDisabledOAuthProviders(_ disabledOAuthProviders: [String], in root: inout Node) {
         guard !disabledOAuthProviders.isEmpty else { return }
-        let pairs = Array(Set(disabledOAuthProviders)).sorted().map { provider in
-            (stringNode(provider), Node.sequence(Node.Sequence([stringNode("*")])))
+        var exclusions = root.mapping?["oauth-excluded-models"]?.mapping ?? Node.Mapping([])
+        for provider in Array(Set(disabledOAuthProviders)).sorted() {
+            exclusions[stringNode(provider)] = Node.sequence(Node.Sequence([stringNode("*")]))
         }
-        root.mapping?["oauth-excluded-models"] = .mapping(Node.Mapping(pairs))
+        root.mapping?["oauth-excluded-models"] = .mapping(exclusions)
+    }
+
+    static func isEmptyOverlay(_ yaml: String) -> Bool {
+        yaml.split(separator: "\n", omittingEmptySubsequences: false).allSatisfy { line in
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmedLine.isEmpty || trimmedLine.hasPrefix("#")
+        }
     }
 
     static func modelSequenceNode(_ models: [String]) -> Node {

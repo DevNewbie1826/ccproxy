@@ -397,6 +397,33 @@ final class ServerManagerConfigTests: XCTestCase {
         }
     }
 
+    func testSaveZaiApiKeyWritesOwnerOnlyCredentialFile() {
+        withTemporaryAuthDirectory { authDir in
+            let manager = makeManager(authDir: authDir)
+            let expectation = expectation(description: "ZAI save accepted")
+
+            manager.saveZaiApiKey("zai-api-key") { success, _ in
+                XCTAssertTrue(success, "ZAI API-key saving should succeed")
+                expectation.fulfill()
+            }
+
+            waitForExpectations(timeout: 2.0)
+
+            let files = (try? FileManager.default.contentsOfDirectory(at: authDir, includingPropertiesForKeys: nil)) ?? []
+            let zaiAuthFiles = files.filter { $0.pathExtension == "json" && $0.lastPathComponent.hasPrefix("zai-") }
+            guard let file = zaiAuthFiles.first else {
+                XCTFail("Accepted ZAI API-key save should create a zai auth file")
+                return
+            }
+            XCTAssertEqual(zaiAuthFiles.count, 1)
+
+            let attributes = try? FileManager.default.attributesOfItem(atPath: file.path)
+            XCTAssertNotNil(attributes, "Failed to read ZAI credential file attributes")
+            XCTAssertEqual(attributes?[.posixPermissions] as? Int, 0o600,
+                           "Credential file should be created with owner read/write permissions only")
+        }
+    }
+
     /// With enabled claude or codex but no provider-matching OAuth auth file/account,
     /// the connected-provider set excludes that provider.
     func testConnectedProviderExcludesOAuthWhenNoAuthFile() {

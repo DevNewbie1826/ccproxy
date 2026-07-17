@@ -84,6 +84,39 @@ final class ConfigComposerTests: XCTestCase {
         XCTAssertEqual(exclusions["codex"] as? [String], ["*"])
     }
 
+    func testCompose_UpsertsDisabledOAuthProvidersIntoBundledExclusions() throws {
+        let bundled = try bundledYAML + """
+
+        oauth-excluded-models:
+          codex:
+            - gpt-old-*
+        """
+        let merged = try compose(
+            bundledYAML: bundled,
+            disabledOAuthProviders: ["claude"]
+        )
+        let exclusions = try oauthExcludedModels(from: merged)
+
+        XCTAssertEqual(exclusions["codex"] as? [String], ["gpt-old-*"])
+        XCTAssertEqual(exclusions["claude"] as? [String], ["*"])
+    }
+
+    func testCompose_DisabledOAuthProviderWinsOverOverlayExclusion() throws {
+        let overlay = """
+        oauth-excluded-models:
+          claude:
+            - claude-3-*
+        """
+        let merged = try compose(
+            userOverlayYAML: overlay,
+            disabledOAuthProviders: ["claude"]
+        )
+        let exclusions = try oauthExcludedModels(from: merged)
+
+        XCTAssertEqual(exclusions["claude"] as? [String], ["*"],
+                       "Disabled provider generation should override any narrower user exclusion")
+    }
+
     func testCompose_MergesOverlayScalarAdditivelyAndOverridesBundledScalar() throws {
         let overlay = """
         debug: true
@@ -200,6 +233,18 @@ final class ConfigComposerTests: XCTestCase {
             ), "Malformed overlay YAML should throw instead of silently falling back")
         }
     }
+
+    func testWriteMergedConfig_TreatsEmptyOverlayFileAsNoOverlay() throws {
+        try assertEmptyOverlayFileIsNoOp("")
+    }
+
+    func testWriteMergedConfig_TreatsWhitespaceOnlyOverlayFileAsNoOverlay() throws {
+        try assertEmptyOverlayFileIsNoOp(" \n\t  \n")
+    }
+
+    func testWriteMergedConfig_TreatsCommentOnlyOverlayFileAsNoOverlay() throws {
+        try assertEmptyOverlayFileIsNoOp("# hello\n")
+    }
 }
 
 private extension ConfigComposerTests {
@@ -272,5 +317,35 @@ private extension ConfigComposerTests {
 
     func yamlMappingsEqual(_ lhs: [String: Any], _ rhs: [String: Any]) -> Bool {
         NSDictionary(dictionary: lhs).isEqual(to: rhs)
+    }
+
+    func oauthExcludedModels(from yaml: String) throws -> [String: Any] {
+        let document = try parseMapping(yaml)
+        return try XCTUnwrap(document["oauth-excluded-models"] as? [String: Any],
+                             "ConfigComposer should emit top-level oauth-excluded-models")
+    }
+
+    func assertEmptyOverlayFileIsNoOp(_ overlayContents: String) throws {
+        try withTemporaryAuthDirectory { authDir in
+            let overlayURL = authDir.appendingPathComponent("overlay.yaml")
+            try overlayContents.write(to: overlayURL, atomically: true, encoding: .utf8)
+
+            let returnedPath = try writeMergedConfig(
+                authDir: authDir,
+                userConfigPath: overlayURL,
+                upstreams: [zaiUpstream(apiKeys: ["k1"])],
+                disabledOAuthProviders: ["claude"],
+                managementSecretKey: "secret"
+            )
+            let contents = try String(contentsOfFile: returnedPath, encoding: .utf8)
+            let document = try parseMapping(contents)
+            let entries = try claudeAPIKeyEntries(from: contents)
+            let exclusions = try oauthExcludedModels(from: contents)
+            let remoteManagement = try XCTUnwrap(document["remote-management"] as? [String: Any])
+
+            XCTAssertEqual(entries.first?["api-key"] as? String, "k1")
+            XCTAssertEqual(exclusions["claude"] as? [String], ["*"])
+            XCTAssertEqual(remoteManagement["secret-key"] as? String, "secret")
+        }
     }
 }

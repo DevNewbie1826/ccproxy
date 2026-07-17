@@ -5,3 +5,4 @@ CCProxy.app
 .worktrees/
 .codegraph/
 .opencode/
+.omo/

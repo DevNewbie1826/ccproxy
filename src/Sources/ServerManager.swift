@@ -547,8 +547,7 @@ class ServerManager: ObservableObject {
 
         do {
             let jsonData = try JSONSerialization.data(withJSONObject: authData, options: .prettyPrinted)
-            try jsonData.write(to: filePath)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: filePath.path)
+            try SecureFileWriter.write(jsonData, to: filePath)
             addLog("✓ \(provider.displayName) API key saved to \(filename)")
 
             let wasRunning = isRunning
