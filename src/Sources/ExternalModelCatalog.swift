@@ -11,7 +11,7 @@ enum ExternalModelCatalog {
     static let currentSchemaVersion = "2"
 
     /// CLIProxyAPI primary provider key → CCProxy provider ID normalization.
-    /// Only keys present in this map are emitted as CCProxy providers.
+    /// Mapped primary-source providers are eligible for merged catalog output.
     static let primaryProviderMapping: [String: String] = [
         "claude": "claude",
         "codex-free": "codex",
@@ -22,13 +22,14 @@ enum ExternalModelCatalog {
         "xai": "xai"
     ]
 
-    /// CCProxy provider ID → models.dev provider key (reverse lookup for secondary source).
+    /// CCProxy provider ID → models.dev provider key for secondary-only catalog coverage.
     static let secondaryProviderMapping: [String: String] = [
         "zai": "zai-coding-plan",
         "minimax": "minimax-coding-plan",
         "opencode-go": "opencode-go"
     ]
 
+    /// Providers whose response model IDs must stay provider-qualified.
     private static let providerQualifiedModelIDProviders: Set<String> = [
         "zai",
         "minimax",
@@ -78,17 +79,12 @@ enum ExternalModelCatalog {
     /// entry has a non-empty ID. Rejects any provider with an empty array or any
     /// model with an empty ID.
     static func isValidSnapshot(_ snapshot: CatalogSnapshot) -> Bool {
-        // Schema version must match current policy version
         guard snapshot.schemaVersion == currentSchemaVersion else { return false }
 
-        // Valid external source metadata
         guard isValidSnapshotSources(snapshot.sources) else { return false }
 
-        // Non-empty providerModels
         guard !snapshot.providerModels.isEmpty else { return false }
 
-        // Every provider must have a non-empty model array
-        // and every model entry must have a non-empty ID
         for (_, entries) in snapshot.providerModels {
             guard !entries.isEmpty else { return false }
             for entry in entries {
@@ -116,7 +112,6 @@ enum ExternalModelCatalog {
             guard let value = json[sourceKey],
                   let descriptors = value as? [[String: Any]] else { continue }
 
-            // Determine CCProxy provider and tier from source key
             let ccproxyProvider: String
             let tier: String?
 
@@ -229,7 +224,6 @@ enum ExternalModelCatalog {
             return nil
         }
 
-        // Build reverse mapping: models.dev key → CCProxy provider
         var devToCCProxy: [String: String] = [:]
         for (ccproxy, devKey) in secondaryProviderMapping {
             devToCCProxy[devKey] = ccproxy
@@ -734,7 +728,6 @@ class CacheCoordinator {
     }
 
     private func attemptRefresh(now: Date) -> CatalogAvailability {
-        // Record the attempt
         _inMemoryLastRefreshAttempt = now
         persistRefreshAttempt(now)
 
@@ -780,7 +773,6 @@ class CacheCoordinator {
             return .unavailable
         }
 
-        // Success: write cache and clear failure
         writeCache(merged, now: now)
         _inMemorySnapshot = merged
         _inMemorySnapshotDate = now
@@ -800,7 +792,6 @@ class CacheCoordinator {
         let cacheFile = cacheDirectory.appendingPathComponent("model-catalog-cache.json")
         try? data.write(to: cacheFile, options: .atomic)
 
-        // Update metadata
         let meta = CacheMetadata(
             cacheWrittenAt: ISO8601DateFormatter().string(from: now),
             lastRefreshAttemptAt: nil,
@@ -818,7 +809,6 @@ class CacheCoordinator {
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
 
-        // Load existing metadata or create new
         var existing: CacheMetadata?
         let metaFile = cacheDirectory.appendingPathComponent("model-catalog-cache-meta.json")
         if let data = try? Data(contentsOf: metaFile),
@@ -904,9 +894,9 @@ class URLSessionCatalogFetcher: CatalogFetcher {
     let session: URLSession
     let timeoutInterval: TimeInterval
 
-    private let modelsJSONURL = URL(string: "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/models.json")!
-    private let codexClientURL = URL(string: "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/codex_client_models.json")!
-    private let modelsDevURL = URL(string: "https://models.dev/api.json")!
+    private static let modelsJSONURL = URL(string: "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/models.json")!
+    private static let codexClientURL = URL(string: "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/codex_client_models.json")!
+    private static let modelsDevURL = URL(string: "https://models.dev/api.json")!
 
     init(session: URLSession? = nil, timeoutInterval: TimeInterval = 15.0) {
         self.timeoutInterval = timeoutInterval
@@ -921,15 +911,15 @@ class URLSessionCatalogFetcher: CatalogFetcher {
     }
 
     func fetchModelsJSON() throws -> Data {
-        return try fetchSynchronously(url: modelsJSONURL)
+        return try fetchSynchronously(url: Self.modelsJSONURL)
     }
 
     func fetchCodexClientModels() throws -> Data {
-        return try fetchSynchronously(url: codexClientURL)
+        return try fetchSynchronously(url: Self.codexClientURL)
     }
 
     func fetchModelsDev() throws -> Data {
-        return try fetchSynchronously(url: modelsDevURL)
+        return try fetchSynchronously(url: Self.modelsDevURL)
     }
 
     private func fetchSynchronously(url: URL) throws -> Data {
@@ -956,7 +946,6 @@ class URLSessionCatalogFetcher: CatalogFetcher {
             throw error
         }
 
-        // Check HTTP status code
         if let httpResponse = resultResponse as? HTTPURLResponse {
             guard httpResponse.statusCode >= 200, httpResponse.statusCode < 300 else {
                 throw NSError(domain: "URLSessionCatalogFetcher", code: httpResponse.statusCode,
