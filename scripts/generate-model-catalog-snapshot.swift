@@ -16,10 +16,10 @@ let snapshotOutputPath = env["MODEL_CATALOG_OUTPUT_PATH"]
     ?? "src/Sources/Resources/model-catalog-snapshot.json"
 
 let modelsJSONURL = URL(string: env["MODEL_CATALOG_MODELS_JSON_URL"]
-    ?? "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/5753d1a0896fd5bb9ace47adb17b0174ceb79e4d/internal/registry/models/models.json")!
+    ?? "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/models.json")!
 
 let codexClientURL = URL(string: env["MODEL_CATALOG_CODEX_CLIENT_URL"]
-    ?? "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/5753d1a0896fd5bb9ace47adb17b0174ceb79e4d/internal/registry/models/codex_client_models.json")!
+    ?? "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/registry/models/codex_client_models.json")!
 
 let modelsDevURL = URL(string: env["MODEL_CATALOG_MODELS_DEV_URL"]
     ?? "https://models.dev/api.json")!
@@ -32,14 +32,15 @@ let primaryProviderMapping: [String: String] = [
     "codex-free": "codex",
     "codex-team": "codex",
     "codex-plus": "codex",
-    "codex-pro": "codex"
+    "codex-pro": "codex",
+    "kimi": "kimi",
+    "xai": "xai"
 ]
 
 // CCProxy provider ID → models.dev provider key
 let secondaryProviderMapping: [String: String] = [
     "zai": "zai-coding-plan",
     "minimax": "minimax-coding-plan",
-    "kimi": "moonshotai",
     "opencode-go": "opencode-go"
 ]
 

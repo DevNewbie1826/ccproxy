@@ -35,6 +35,21 @@ cat > "$TMPDIR/models.json" << 'EOF'
     ],
     "codex-free": [
         {"id": "gpt-4o", "object": "model", "created": 1700000002, "owned_by": "openai"}
+    ],
+    "kimi": [
+        {"id": "kimi-k2", "object": "model", "created": 1700000003, "owned_by": "moonshotai"}
+    ],
+    "xai": [
+        {"id": "grok-4.5", "object": "model", "created": 1700000004, "owned_by": "xai"}
+    ],
+    "gemini": [
+        {"id": "gemini-ignored", "object": "model", "created": 1700000005, "owned_by": "google"}
+    ],
+    "antigravity": [
+        {"id": "antigravity-ignored", "object": "model", "created": 1700000006, "owned_by": "google"}
+    ],
+    "aistudio": [
+        {"id": "aistudio-ignored", "object": "model", "created": 1700000007, "owned_by": "google"}
     ]
 }
 EOF
@@ -62,6 +77,11 @@ cat > "$TMPDIR/models_dev.json" << 'EOF'
     "opencode-go": {
         "models": {
             "test-model": {"owned_by": "opencode-go"}
+        }
+    },
+    "moonshotai": {
+        "models": {
+            "kimi-k2-0905-preview": {"owned_by": "moonshotai"}
         }
     }
 }
@@ -614,6 +634,91 @@ if [ $EXIT_CODE -ne 0 ]; then
     pass "Test 15: script exited non-zero ($EXIT_CODE) with old-schema '1' snapshot (schema mismatch rejected)"
 else
     fail "Test 15: script exited 0 with old-schema '1' snapshot (expected non-zero — old schema must be rejected)"
+fi
+
+# ---- Test 16: Primary provider policy includes kimi/xai and excludes unmapped/removed secondary providers ----
+
+echo ""
+echo "=== Test 16: Primary policy includes kimi/xai and excludes unmapped/removed secondary providers ==="
+
+OUTPUT16="$TMPDIR/test16-snapshot.json"
+
+set +e
+MODEL_CATALOG_OUTPUT_PATH="$OUTPUT16" \
+MODEL_CATALOG_MODELS_JSON_URL="$MODELS_URL" \
+MODEL_CATALOG_CODEX_CLIENT_URL="$CODEX_URL" \
+MODEL_CATALOG_MODELS_DEV_URL="$DEV_URL" \
+swift "$PROJECT_DIR/scripts/generate-model-catalog-snapshot.swift" > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+
+if [ $EXIT_CODE -ne 0 ]; then
+    fail "Test 16: script failed with exit code $EXIT_CODE"
+elif [ ! -f "$OUTPUT16" ]; then
+    fail "Test 16: output file missing"
+elif command -v python3 &>/dev/null; then
+    POLICY_CHECK=$(python3 - "$OUTPUT16" << 'PY' 2>/dev/null || echo "python-error"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    snapshot = json.load(handle)
+
+provider_models = snapshot.get("providerModels", {})
+all_ids = {
+    entry.get("id")
+    for entries in provider_models.values()
+    for entry in entries
+}
+
+checks = {
+    "schema-v2": snapshot.get("schemaVersion") == "2",
+    "kimi-provider": "kimi" in provider_models,
+    "kimi-bare-id": any(entry.get("id") == "kimi-k2" for entry in provider_models.get("kimi", [])),
+    "xai-provider": "xai" in provider_models,
+    "xai-bare-id": any(entry.get("id") == "grok-4.5" for entry in provider_models.get("xai", [])),
+    "moonshot-secondary-ignored": "kimi-k2-0905-preview" not in all_ids,
+    "gemini-excluded": "gemini" not in provider_models and "gemini-ignored" not in all_ids,
+    "antigravity-excluded": "antigravity" not in provider_models and "antigravity-ignored" not in all_ids,
+    "aistudio-excluded": "aistudio" not in provider_models and "aistudio-ignored" not in all_ids,
+}
+
+failed = [name for name, ok in checks.items() if not ok]
+if failed:
+    print("failed:" + ",".join(failed))
+    sys.exit(1)
+
+print("ok:kimi,xai primary providers included; moonshotai/gemini/antigravity/aistudio excluded")
+PY
+)
+    if [[ "$POLICY_CHECK" == ok:* ]]; then
+        pass "Test 16: $POLICY_CHECK"
+    else
+        fail "Test 16: policy assertions failed ($POLICY_CHECK)"
+    fi
+else
+    POLICY_CHECK=$(swift -e "
+import Foundation
+let data = try Data(contentsOf: URL(fileURLWithPath: \"$OUTPUT16\"))
+let snapshot = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+let providerModels = snapshot[\"providerModels\"] as? [String: [[String: Any]]] ?? [:]
+let allIds = Set(providerModels.values.flatMap { $0 }.compactMap { $0[\"id\"] as? String })
+let checks = [
+    snapshot[\"schemaVersion\"] as? String == \"2\",
+    providerModels[\"kimi\"]?.contains { $0[\"id\"] as? String == \"kimi-k2\" } == true,
+    providerModels[\"xai\"]?.contains { $0[\"id\"] as? String == \"grok-4.5\" } == true,
+    !allIds.contains(\"kimi-k2-0905-preview\"),
+    providerModels[\"gemini\"] == nil && !allIds.contains(\"gemini-ignored\"),
+    providerModels[\"antigravity\"] == nil && !allIds.contains(\"antigravity-ignored\"),
+    providerModels[\"aistudio\"] == nil && !allIds.contains(\"aistudio-ignored\")
+]
+print(checks.allSatisfy { $0 } ? \"ok\" : \"failed\")
+" 2>/dev/null || echo "swift-error")
+    if [ "$POLICY_CHECK" = "ok" ]; then
+        pass "Test 16: kimi/xai primary providers included; moonshotai/gemini/antigravity/aistudio excluded"
+    else
+        fail "Test 16: policy assertions failed ($POLICY_CHECK)"
+    fi
 fi
 
 # ---- Summary ----
