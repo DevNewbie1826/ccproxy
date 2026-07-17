@@ -192,6 +192,104 @@ final class AuthStatusTests: XCTestCase {
             XCTAssertFalse(manager.providersRequiringReLogin.contains(.kimi))
         }
     }
+
+    func testExistingLegacyKimiQuarantineFileRequiresReLoginForFreshManager() throws {
+        try withTemporaryAuthDirectory { authDir in
+            let legacyFile = authDir.appendingPathComponent("kimi-123.json.legacy")
+            try "already quarantined".write(to: legacyFile, atomically: true, encoding: .utf8)
+
+            let manager = makeManager(authDir: authDir)
+            refreshAuthStatus(manager)
+
+            XCTAssertTrue(manager.providersRequiringReLogin.contains(.kimi))
+        }
+    }
+
+    func testExistingLegacyKimiQuarantineFileDoesNotRequireReLoginWhenValidOAuthExists() throws {
+        try withTemporaryAuthDirectory { authDir in
+            let legacyFile = authDir.appendingPathComponent("kimi-123.json.legacy")
+            let oauthFile = authDir.appendingPathComponent("kimi-oauth.json")
+            try "already quarantined".write(to: legacyFile, atomically: true, encoding: .utf8)
+            try writeCredential(kimiOAuthCredential(), to: oauthFile)
+
+            let manager = makeManager(authDir: authDir)
+            refreshAuthStatus(manager)
+
+            XCTAssertFalse(manager.providersRequiringReLogin.contains(.kimi))
+        }
+    }
+
+    func testExistingNumberedLegacyKimiQuarantineFileRequiresReLogin() throws {
+        try withTemporaryAuthDirectory { authDir in
+            let legacyFile = authDir.appendingPathComponent("kimi-x.json.legacy.2")
+            try "already quarantined".write(to: legacyFile, atomically: true, encoding: .utf8)
+
+            let manager = makeManager(authDir: authDir)
+            refreshAuthStatus(manager)
+
+            XCTAssertTrue(manager.providersRequiringReLogin.contains(.kimi))
+        }
+    }
+
+    func testExistingLegacyKimiQuarantineFilesAreNotTouchedDuringDetection() throws {
+        try withTemporaryAuthDirectory { authDir in
+            let legacyFile = authDir.appendingPathComponent("kimi-touch.json.legacy")
+            let numberedLegacyFile = authDir.appendingPathComponent("kimi-touch.json.legacy.2")
+            try "already quarantined".write(to: legacyFile, atomically: true, encoding: .utf8)
+            try "already numbered".write(to: numberedLegacyFile, atomically: true, encoding: .utf8)
+
+            let manager = makeManager(authDir: authDir)
+            refreshAuthStatus(manager)
+
+            assertFileExists(legacyFile)
+            assertFileExists(numberedLegacyFile)
+            XCTAssertEqual(try String(contentsOf: legacyFile, encoding: .utf8), "already quarantined")
+            XCTAssertEqual(try String(contentsOf: numberedLegacyFile, encoding: .utf8), "already numbered")
+        }
+    }
+
+    func testNonKimiLegacyQuarantineFileDoesNotRequireReLogin() throws {
+        try withTemporaryAuthDirectory { authDir in
+            let legacyFile = authDir.appendingPathComponent("zai-1.json.legacy")
+            try "zai legacy".write(to: legacyFile, atomically: true, encoding: .utf8)
+
+            let manager = makeManager(authDir: authDir)
+            refreshAuthStatus(manager)
+
+            XCTAssertFalse(manager.providersRequiringReLogin.contains(.kimi))
+            XCTAssertTrue(manager.providersRequiringReLogin.isEmpty)
+        }
+    }
+
+    func testExistingLegacyKimiQuarantineFlagIsStableAcrossDoubleScan() throws {
+        try withTemporaryAuthDirectory { authDir in
+            let legacyFile = authDir.appendingPathComponent("kimi-stable.json.legacy")
+            try "already quarantined".write(to: legacyFile, atomically: true, encoding: .utf8)
+
+            let manager = makeManager(authDir: authDir)
+            refreshAuthStatus(manager)
+            refreshAuthStatus(manager)
+
+            XCTAssertTrue(manager.providersRequiringReLogin.contains(.kimi))
+            assertFileExists(legacyFile)
+        }
+    }
+
+    func testExistingLegacyKimiQuarantineFlagStaysClearAcrossDoubleScanWhenValidOAuthExists() throws {
+        try withTemporaryAuthDirectory { authDir in
+            let legacyFile = authDir.appendingPathComponent("kimi-stable.json.legacy")
+            let oauthFile = authDir.appendingPathComponent("kimi-oauth.json")
+            try "already quarantined".write(to: legacyFile, atomically: true, encoding: .utf8)
+            try writeCredential(kimiOAuthCredential(), to: oauthFile)
+
+            let manager = makeManager(authDir: authDir)
+            refreshAuthStatus(manager)
+            refreshAuthStatus(manager)
+
+            XCTAssertFalse(manager.providersRequiringReLogin.contains(.kimi))
+            assertFileExists(legacyFile)
+        }
+    }
 }
 
 private extension AuthStatusTests {

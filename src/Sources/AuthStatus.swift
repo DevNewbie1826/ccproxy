@@ -107,6 +107,9 @@ class AuthManager: ObservableObject {
         
         do {
             let files = try FileManager.default.contentsOfDirectory(at: authDir, includingPropertiesForKeys: nil)
+            if hasLegacyKimiQuarantineFile(in: files) {
+                providersWithQuarantinedLegacyCredentials.insert(.kimi)
+            }
             
             for file in files where file.pathExtension == "json" {
                 guard let data = try? Data(contentsOf: file),
@@ -201,6 +204,27 @@ class AuthManager: ObservableObject {
         }
 
         return quarantinedProviders
+    }
+
+    private func hasLegacyKimiQuarantineFile(in files: [URL]) -> Bool {
+        files.contains { file in
+            isLegacyKimiQuarantineFile(file)
+        }
+    }
+
+    private func isLegacyKimiQuarantineFile(_ file: URL) -> Bool {
+        let fileName = file.lastPathComponent
+        guard fileName.hasPrefix("kimi"),
+              let legacyRange = fileName.range(of: ".json.legacy") else {
+            return false
+        }
+
+        let suffix = fileName[legacyRange.upperBound...]
+        guard !suffix.isEmpty else { return true }
+        guard suffix.first == "." else { return false }
+
+        let numberedSuffix = suffix.dropFirst()
+        return !numberedSuffix.isEmpty && numberedSuffix.allSatisfy { $0.isNumber }
     }
 
     private func isLegacyKimiCredential(_ file: URL) -> Bool {

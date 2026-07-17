@@ -42,6 +42,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNoti
         serverManager.onVercelConfigChanged = { [weak self] in
             self?.syncVercelConfig()
         }
+
+        checkAuthStatusAtLaunch()
         
         // Warm commonly used icons to avoid first-use disk hits
         preloadIcons()
@@ -67,6 +69,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNoti
             name: .authDirectoryChanged,
             object: nil
         )
+    }
+
+    func checkAuthStatusAtLaunch() {
+        AuthManager().checkAuthStatus()
     }
     
     private func preloadIcons() {
