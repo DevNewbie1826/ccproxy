@@ -98,7 +98,6 @@ class AuthManager: ObservableObject {
         let quarantinedProviders = quarantineLegacyKimiCredentials(in: authDir)
         providersWithQuarantinedLegacyCredentials.formUnion(quarantinedProviders)
         
-        // Build new accounts dictionary
         var newAccounts: [ServiceType: [AuthAccount]] = [:]
         for type in ServiceType.allCases {
             newAccounts[type] = []
@@ -108,18 +107,14 @@ class AuthManager: ObservableObject {
         
         do {
             let files = try FileManager.default.contentsOfDirectory(at: authDir, includingPropertiesForKeys: nil)
-            NSLog("[AuthStatus] Scanning %d files in auth directory", files.count)
             
             for file in files where file.pathExtension == "json" {
-                NSLog("[AuthStatus] Checking file: %@", file.lastPathComponent)
                 guard let data = try? Data(contentsOf: file),
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let type = json["type"] as? String,
                       let serviceType = ServiceType(rawValue: type.lowercased()) else {
                     continue
                 }
-                
-                NSLog("[AuthStatus] Found type '%@' in %@", type, file.lastPathComponent)
                 
                 let email = json["email"] as? String
                 let login = json["login"] as? String
@@ -153,7 +148,6 @@ class AuthManager: ObservableObject {
                    !account.isDisabled {
                     hasValidKimiOAuthAccount = true
                 }
-                NSLog("[AuthStatus] Found %@ auth: %@", serviceType.displayName, account.displayName)
             }
 
             if hasValidKimiOAuthAccount {
@@ -162,7 +156,6 @@ class AuthManager: ObservableObject {
 
             let reLoginProviders = providersWithQuarantinedLegacyCredentials
             
-            // Update on main thread
             DispatchQueue.main.async {
                 for type in ServiceType.allCases {
                     self.serviceAccounts[type] = ServiceAccounts(

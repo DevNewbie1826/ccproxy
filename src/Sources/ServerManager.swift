@@ -1,6 +1,5 @@
 import Foundation
 import Combine
-import AppKit
 
 private struct RingBuffer<Element> {
     private var storage: [Element?]
@@ -396,7 +395,6 @@ class ServerManager: ObservableObject {
         let authProcess = Process()
         authProcess.executableURL = URL(fileURLWithPath: bundledPath)
         
-        // Get the config path
         let configPath = (resourcePath as NSString).appendingPathComponent("config.yaml")
         
         switch command {
@@ -410,7 +408,6 @@ class ServerManager: ObservableObject {
             authProcess.arguments = ["--config", configPath, "-xai-login"]
         }
         
-        // Create pipes for output
         let outputPipe = Pipe()
         let errorPipe = Pipe()
         let inputPipe = Pipe()
@@ -431,7 +428,6 @@ class ServerManager: ObservableObject {
             }
         }
         
-        // Set environment to inherit from parent
         authProcess.environment = ProcessInfo.processInfo.environment
         
         do {
@@ -462,7 +458,6 @@ class ServerManager: ObservableObject {
                     NSLog("[Auth] Process running after wait, returning success")
                     completion(true, "🌐 Browser opened for authentication.\n\nPlease complete the login in your browser.\n\nThe app will automatically detect when you're authenticated.")
                 } else {
-                    // Process died quickly - check for error
                     let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
                     let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                     
@@ -472,11 +467,9 @@ class ServerManager: ObservableObject {
                     NSLog("[Auth] Process died quickly - output: %@", output.isEmpty ? "(empty)" : String(output.prefix(200)))
                     
                     if output.contains("Opening browser") || output.contains("Attempting to open URL") {
-                        // Browser opened but process finished (probably success)
                         NSLog("[Auth] Browser opened, process completed")
                         completion(true, "🌐 Browser opened for authentication.\n\nPlease complete the login in your browser.\n\nThe app will automatically detect when you're authenticated.")
                     } else {
-                        // Real error
                         NSLog("[Auth] Process failed")
                         let message = error.isEmpty ? (output.isEmpty ? "Authentication process failed unexpectedly" : output) : error
                         completion(false, message)
@@ -667,12 +660,12 @@ class ServerManager: ObservableObject {
             return []
         }
 
-        // Date formatters matching AuthManager's parsing
         let formatterWithFractional = ISO8601DateFormatter()
         formatterWithFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let formatterStandard = ISO8601DateFormatter()
         formatterStandard.formatOptions = [.withInternetDateTime]
         let dateFormatters = [formatterWithFractional, formatterStandard]
+        let expirationFields = ["expired", "expires_at", "expiresAt", "expiration"]
 
         // Collect credential info per service type
         struct CredentialInfo {
@@ -694,9 +687,7 @@ class ServerManager: ObservableObject {
 
             let isDisabled = json["disabled"] as? Bool ?? false
 
-            // Check all supported expiration field names
             var isExpired = false
-            let expirationFields = ["expired", "expires_at", "expiresAt", "expiration"]
             for field in expirationFields {
                 if let expiredStr = json[field] as? String {
                     for formatter in dateFormatters {
@@ -735,18 +726,14 @@ class ServerManager: ObservableObject {
             let credentials = credentialsByType[serviceType] ?? []
 
             if oauthProviderRawValues.contains(serviceType.rawValue) {
-                // OAuth provider: needs at least one non-disabled, non-expired credential
+                let requiresAccessToken = serviceType == .kimi || serviceType == .xai
                 if credentials.contains(where: { credential in
                     guard !credential.isDisabled && !credential.isExpired else { return false }
-                    if serviceType == .kimi || serviceType == .xai {
-                        return credential.hasNonEmptyAccessToken
-                    }
-                    return true
+                    return !requiresAccessToken || credential.hasNonEmptyAccessToken
                 }) {
                     connected.insert(serviceType)
                 }
             } else {
-                // API-key provider: needs at least one non-disabled credential with non-empty key
                 if credentials.contains(where: { !$0.isDisabled && $0.hasNonEmptyApiKey }) {
                     connected.insert(serviceType)
                 }
