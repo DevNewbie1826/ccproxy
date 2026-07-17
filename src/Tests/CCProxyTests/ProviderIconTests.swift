@@ -13,8 +13,23 @@ final class ProviderIconTests: XCTestCase {
                        "opencode-go icon name must be the expected PNG filename")
     }
 
+    func testXaiProviderIconNameIsNonEmptyPng() throws {
+        let iconName = ProviderIconNames.iconName(for: .xai)
+        XCTAssertFalse(iconName.isEmpty, "xai icon name must not be empty")
+        XCTAssertEqual(iconName, "icon-xai.png",
+                       "xai icon name must be the expected PNG filename")
+    }
+
     func testOpenCodeGoProviderIconLoadsAsPNGThroughIconCatalogPath() throws {
-        let iconName = ProviderIconNames.iconName(for: .opencodeGo)
+        try assertProviderIconLoadsAsPNG(.opencodeGo)
+    }
+
+    func testXaiProviderIconLoadsAsPNGThroughIconCatalogPath() throws {
+        try assertProviderIconLoadsAsPNG(.xai)
+    }
+
+    private func assertProviderIconLoadsAsPNG(_ serviceType: ServiceType) throws {
+        let iconName = ProviderIconNames.iconName(for: serviceType)
         XCTAssertFalse(iconName.isEmpty, "icon name must be non-empty before file check")
 
         // Resolve resource from the Sources/Resources directory used by the package target
@@ -46,6 +61,6 @@ final class ProviderIconTests: XCTestCase {
 
         // Verify NSImage can load the file through the same file-path mechanism
         let image = NSImage(contentsOfFile: iconPath)
-        XCTAssertNotNil(image, "NSImage must load icon-opencode-go.png from file path")
+        XCTAssertNotNil(image, "NSImage must load \(iconName) from file path")
     }
 }
