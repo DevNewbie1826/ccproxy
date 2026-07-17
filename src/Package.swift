@@ -13,12 +13,13 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.5.0")
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.5.0"),
+        .package(url: "https://github.com/jpsim/Yams", from: "5.1.0")
     ],
     targets: [
         .executableTarget(
             name: "CCProxy",
-            dependencies: ["Sparkle"],
+            dependencies: ["Sparkle", "Yams"],
             path: "Sources",
             resources: [
                 .copy("Resources")
@@ -26,7 +27,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CCProxyTests",
-            dependencies: ["CCProxy"],
+            dependencies: ["CCProxy", "Yams"],
             path: "Tests/CCProxyTests",
             resources: [
                 .copy("Fixtures/config.yaml")
